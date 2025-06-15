@@ -1,6 +1,7 @@
-/* AV-Protokoll, erweiterte Definition vom 26.06.1995
-   Genaue Beschreibung der Messages in der Dokumentation
-   zu Thing (THING.HYP ab Version 0.54) */
+/* AV-Protocol, extended definition from 1995-06-26
+ * Detailed description of messages in the documentation
+ * for Thing (THING.HYP from version 0.54)
+ */
 
 #ifndef __vaproto__
 #define __vaproto__
@@ -10,7 +11,7 @@
 
 typedef enum
 {
-	AV_PROTOKOLL      = 0x4700,
+	AV_PROTOCOL       = 0x4700,
 	VA_PROTOSTATUS    = 0x4701,
 	AV_GETSTATUS      = 0x4703,
 	AV_STATUS         = 0x4704,
@@ -46,7 +47,7 @@ typedef enum
 	AV_XWIND          = 0x4740,
 	VA_XOPEN          = 0x4741,
 	
-/* Neue Messages seit dem 26.06.1995 */
+/* New Messages since 1995-06-26 */
 	
 	AV_VIEW           = 0x4751,
 	VA_VIEWED         = 0x4752,
@@ -58,11 +59,11 @@ typedef enum
 	VA_FILEDELETED    = 0x4758,
 	AV_SETWINDPOS     = 0x4759,
 	VA_PATH_UPDATE    = 0x4760,
-	VA_HIGH							/* HR please always do this! */
+	VA_HIGH /* HR please always do this! */
 } AV_VA;
 
 
-/* Objekttypen fuer VA_THAT_IZIT */
+/* Object types for VA_THAT_IZIT */
 
 enum
 {
@@ -80,9 +81,9 @@ enum
 
 typedef enum
 {
-	VV_SETSTATUS = 0x0001,
-	VV_START     = 0x0002,
-	VV_STARTED   = 0x0004,
+	VV_SETSTATUS   = 0x0001,
+	VV_START       = 0x0002,
+	VV_STARTED     = 0x0004,
 	VV_FONTCHANGED = 0x0008,
 	VV_ACC_QUOTING = 0x0010,
 	VV_PATH_UPDATE = 0x0020
@@ -90,33 +91,33 @@ typedef enum
 
 typedef enum
 {										/* mp[3]: */
-	AA_SENDKEY     = 0x0001,				/* b0: MAGXDESK, THING */
-	AA_ASKFILEFONT = 0x0002,				/* b1:           THING */
-	AA_ASKCONFONT  = 0x0004,				/* b2:           THING */
-	AA_ASKOBJECT   = 0x0008,
-	AA_OPENWIND    = 0x0010,				/* b4: MAGXDESK, THING */
-	AA_STARTPROG   = 0x0020,				/* b5: MAGXDESK, THING */
-	AA_ACCWIND     = 0x0040,				/* b6:           THING */
-	AA_STATUS      = 0x0080,				/* b7:           THING */
-	AA_COPY_DRAGGED= 0x0100,				/* b8:           THING */
-	AA_DRAG_ON_WINDOW=0x0200,				/* b9: MAGXDESK, THING */
-	AA_EXIT        = 0x0400,				/* b10: MAGXDESK, THING */
-	AA_XWIND       = 0x0800,				/* b11: MAGXDESK, THING */
-	AA_FONTCHANGED = 0x1000,				/* b2:            THING */
-	AA_STARTED     = 0x2000,				/* b13: MAGXDESK, THING */
-	AA_SRV_QUOTING = 0x4000,				/* b14:           THING */
-	AA_FILE        = 0x8000,				/* b15:           THING */
+	AA_SENDKEY        = 0x0001,			/* b0: MAGXDESK, THING */
+	AA_ASKFILEFONT    = 0x0002,			/* b1:           THING */
+	AA_ASKCONFONT     = 0x0004,			/* b2:           THING */
+	AA_ASKOBJECT      = 0x0008,
+	AA_OPENWIND       = 0x0010,			/* b4: MAGXDESK, THING */
+	AA_STARTPROG      = 0x0020,			/* b5: MAGXDESK, THING */
+	AA_ACCWIND        = 0x0040,			/* b6:           THING */
+	AA_STATUS         = 0x0080,			/* b7:           THING */
+	AA_COPY_DRAGGED   = 0x0100,			/* b8:           THING */
+	AA_DRAG_ON_WINDOW = 0x0200,			/* b9: MAGXDESK, THING */
+	AA_EXIT           = 0x0400,			/* b10: MAGXDESK, THING */
+	AA_XWIND          = 0x0800,			/* b11: MAGXDESK, THING */
+	AA_FONTCHANGED    = 0x1000,			/* b2:            THING */
+	AA_STARTED        = 0x2000,			/* b13: MAGXDESK, THING */
+	AA_SRV_QUOTING    = 0x4000,			/* b14:           THING */
+	AA_FILE           = 0x8000,			/* b15:           THING */
 										/* mp[4]:          THING */
-	AA_COPY        = 0x0001,
-	AA_DELETE      = 0x0002,
-	AA_VIEW        = 0x0004,
-	AA_SETWINDPOS  = 0x0008,
-	AA_COPYFILELINK= 0x0010,
-	AA_SENDCLICK   = 0x0020
+	AA_COPY           = 0x0001,
+	AA_DELETE         = 0x0002,
+	AA_VIEW           = 0x0004,
+	AA_SETWINDPOS     = 0x0008,
+	AA_COPYFILELINK   = 0x0010,
+	AA_SENDCLICK      = 0x0020
 } av_va_have;
 
-/* Makros zum Testen auf Quoting */
+/* Macros for testing for Quoting */
 
-#define VA_ACC_QUOTING(a)    ((a) & VV_ACC_QUOTING)
-#define VA_SERVER_QUOTING(a) ((a) & AA_SRV_QUOTING)
+#define VA_ACC_QUOTING(a)     ((a) & VV_ACC_QUOTING)
+#define VA_SERVER_QUOTING(a)  ((a) & AA_SRV_QUOTING)
 #endif
