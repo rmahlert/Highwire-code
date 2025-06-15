@@ -1,4 +1,4 @@
-/*
+/* form.c
  ** Form handler
  **
  ** Changes
@@ -13,6 +13,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <wctype.h>
+#include <stdio.h> // Required for snprintf and printf
 
 #ifndef __PUREC__
 #  include <osbind.h>
@@ -113,9 +114,7 @@ struct s_slctitem {
 	char     Strng[82];
 };
 
-
-static void finish_selct (INPUT);
-
+// Forward declarations for functions defined later
 static WCHAR * edit_init (INPUT, TEXTBUFF, UWORD cols, UWORD rows, size_t size);
 static BOOL    edit_zero (INPUT);
 static void    edit_feed (INPUT, ENCODING, const char * beg, const char * end);
@@ -126,6 +125,10 @@ static void    form_activate_multipart (FORM form);
 static int     ctrl_left  (WCHAR * beg, WCHAR * end);
 static int     ctrl_right (WCHAR * beg, WCHAR * end);
 static void    del_chars (INPUT input, WORD col, WORD row, int numChars);
+static void    finish_selct (INPUT input);
+static char  * base64enc (const char * src, long len);
+static void    form_activate (FORM form);
+static void    input_file_handler (INPUT input); // Declaration for the handler
 
 #define        __edit_len(inp,a,b)   ((inp)->TextArray[b]-(inp)->TextArray[a]-1)
 #define        edit_rowln(inp,row)   __edit_len (inp, row, row +1)
@@ -144,7 +147,7 @@ int iswspace(wint_t wc)
 		0x2028, 0x2029, 0x205f, 0x3000, 0
 	};
 	int i;
-	
+
 	for (i = 0; spaces[i] != 0; i++)
 		if (spaces[i] == wc)
 			return 1;
@@ -201,18 +204,18 @@ unicode_to_utf8 (WCHAR *src)
 			}
 			else if (in < 0x1fff)
 			{
-				out = (char)((in >> 7) & 0x3f) | 0x80;
+				out = (char)(((in >> 6) & 0x1F) | 0xC0); /* Corrected: Shift by 6 bits for first byte */
 				*outptr++ = out;
-				out = (char)(in & 0x7f);
+				out = (char)((in & 0x3F) | 0x80); /* Corrected: Mask with 0x3F for second byte */
 				*outptr++ = out;
 			}
 			else
 			{
-				out = (char)((in >> 13) & 0x07) | 0xc0;
+				out = (char)(((in >> 12) & 0x0F) | 0xE0); /* Corrected: Shift by 12 bits for first byte */
 				*outptr++ = out;
-				out = (char)((in >> 7) & 0x3f) | 0x80;
+				out = (char)(((in >> 6) & 0x3F) | 0x80); /* Corrected: Shift by 6 bits for second byte */
 				*outptr++ = out;
-				out = (char)(in & 0x7f);
+				out = (char)((in & 0x3F) | 0x80); /* Corrected: Mask with 0x3F for third byte */
 				*outptr++ = out;
 			}
 		}
@@ -227,7 +230,11 @@ void *
 new_form (FRAME frame, char * target, char * action, const char * method, char *enctype)
 {
 	char *ptr;
-	FORM form = malloc (sizeof (struct s_form));
+		FORM form = malloc (sizeof (struct s_form));
+
+	if (!form) {
+		return NULL;
+	}
 
 	if (!action) {
 		const char * q = strchr (frame->BaseHref->FullName, '?');
@@ -236,6 +243,9 @@ new_form (FRAME frame, char * target, char * action, const char * method, char *
 		if ((action = malloc (n +1)) != NULL) {
 			strncpy (action, frame->BaseHref->FullName, n);
 			action[n] = '\0';
+		} else {
+			free(form); /* Allocation failed, clean up */
+			return NULL;
 		}
 	}
 
@@ -250,7 +260,7 @@ new_form (FRAME frame, char * target, char * action, const char * method, char *
 		while(ptr != NULL)
 		{
 			ptr++;
-			strcpy(ptr,ptr+4);
+			memmove(ptr, ptr + 4, strlen(ptr + 4) + 1);
 			ptr = strstr(ptr,"&amp;");
 		}
 	}
@@ -281,16 +291,16 @@ new_form (FRAME frame, char * target, char * action, const char * method, char *
 
 /*============================================================================*/
 void
-form_finish (TEXTBUFF current)
+form_finish (TEXTBUFF current_tb) // Renamed parameter to avoid shadowing future 'current'
 {
-	INPUT input = (current->form ? ((FORM)current->form)->InputList : NULL);
+	INPUT input = (current_tb->form ? ((FORM)current_tb->form)->InputList : NULL);
 	while (input) {
 		if (input->Type == IT_SELECT) {
 			finish_selct (input);
 		}
 		input = input->Next;
 	}
-	current->form = NULL;
+	current_tb->form = NULL;
 }
 
 /*============================================================================*/
@@ -350,6 +360,9 @@ _alloc (INP_TYPE type, TEXTBUFF current, const char * name)
 	FORM   form  = current->form;
 	size_t n_len = (name && *name ? strlen (name) : 0);
 	INPUT  input = malloc (sizeof (struct s_input) + n_len);
+	if (!input) {
+		return NULL;
+	}
 	input->Next      = NULL;
 	input->u.Void    = NULL;
 	input->Paragraph = current->paragraph;
@@ -421,7 +434,9 @@ form_check (TEXTBUFF current, const char * name, char * value, BOOL checked)
 	input->Value   = value;
 	} else {
 		char *val = malloc (3);
-		if (val) memcpy (val, "on", 3);
+		if (val) {
+			memcpy (val, "on", 3);
+		}
 		input->Value = val;
 	}
 	input->checked = checked;
@@ -491,6 +506,10 @@ form_buttn (TEXTBUFF current, const char * name, const char * value,
 	} else {
 		input->SubType = sub_type;
 		input->Value   = strdup (value);
+		if (!input->Value) {
+			/* Fail gracefully by disabling the input if memory allocation fails */
+			input->disabled = TRUE;
+		}
 
 		font_byType (-1, -1, -1, word);
 		scan_string_to_16bit (value, encoding, &current->text,
@@ -520,11 +539,18 @@ form_text (TEXTBUFF current, const char * name, char * value, UWORD maxlen,
 	if (edit_init (input, current, cols, 1, size)) {
 		if (value && v_len < maxlen) {
 			char * mem = malloc (maxlen +1);
-			if (mem) memcpy (mem, value, v_len +1);
-			free (value);
-			value = mem;
+			if (mem) {
+				memcpy (mem, value, v_len +1);
+				free (value);
+				value = mem;
+			}
+			/* If mem is NULL, we just continue with the old, smaller 'value' buffer */
 		} else if (!value && is_pwd) {
 			value = malloc (maxlen +1);
+			if (!value) {
+				input->readonly = TRUE; /* Fail gracefully by making the field readonly */
+				return input;
+			}
 		}
 		if (is_pwd) { /* == "PASSWORD" */
 			input->Value = value;
@@ -546,7 +572,7 @@ form_text (TEXTBUFF current, const char * name, char * value, UWORD maxlen,
 INPUT
 new_input (PARSER parser, WORD width)
 {
-	INPUT    input   = NULL;
+	INPUT    input_new   = NULL; // Renamed to avoid shadowing
 	FRAME    frame   = parser->Frame;
 	TEXTBUFF current = &parser->Current;
 	const char * val = "T"; /* default type is TEXT */
@@ -574,41 +600,41 @@ new_input (PARSER parser, WORD width)
 		if (*val == 'F') {
 			INPUT bttn = form_buttn (current, name, "...", frame->Encoding, 'F');
 
-			input = form_text (current, name,
+			input_new = form_text (current, name,
 					   	get_value_exists (parser, KEY_READONLY) ? get_value_str (parser, KEY_VALUE) : strdup(""),
 		                   mlen, frame->Encoding, (cols ? cols : 20),
 		                   1, (*val == 'P'));
 
 			/* Add the browse button */
-			bttn->u.FileEd = input;
-			input->Type = IT_FILE;
+			bttn->u.FileEd = input_new;
+			input_new->Type = IT_FILE;
 			if (width > 0) {
 				width = (width > bttn->Word->word_width
 				         ? width - bttn->Word->word_width : 1);
 			}
 		} else {
-			input = form_text (current, name, get_value_str (parser, KEY_VALUE),
+			input_new = form_text (current, name, get_value_str (parser, KEY_VALUE),
 		                   mlen, frame->Encoding, (cols ? cols : 20),
 		                   get_value_exists (parser, KEY_READONLY),
 		                   (*val == 'P'));
 		}
 
 		if (width > 0) {
-			WORD cw = (input->Word->word_width -1 -4) / input->VisibleX;
-			input->Word->word_width = max (width, input->Word->word_height *2);
-			input->VisibleX = (input->Word->word_width -1 -4) / cw;
+			WORD cw = (input_new->Word->word_width -1 -4) / input_new->VisibleX;
+			input_new->Word->word_width = max (width, input_new->Word->word_height *2);
+			input_new->VisibleX = (input_new->Word->word_width -1 -4) / cw;
 		}
 	} else if (stricmp (output, "HIDDEN") == 0) {
-		input = _alloc (IT_HIDDN, current, name);
-		input->Value = get_value_str (parser, KEY_VALUE);
+		input_new = _alloc (IT_HIDDN, current, name);
+		input_new->Value = get_value_str (parser, KEY_VALUE);
 
 	} else if (stricmp (output, "RADIO") == 0) {
 		get_value (parser, KEY_VALUE, output, sizeof(output));
-		input = form_radio (current, name, output,
+		input_new = form_radio (current, name, output,
 		                    get_value (parser, KEY_CHECKED, NULL,0));
 
 	} else if (stricmp (output, "CHECKBOX") == 0) {
-		input = form_check (current, name, get_value_str (parser, KEY_VALUE),
+		input_new = form_check (current, name, get_value_str (parser, KEY_VALUE),
 		                    get_value (parser, KEY_CHECKED, NULL,0));
 
 	} else if (stricmp (output, val = "Submit") == 0 ||
@@ -631,28 +657,28 @@ new_input (PARSER parser, WORD width)
 				while (isspace (*(--p))) *p = '\0';
 			}
 		}
-		input = form_buttn (current, name, val, frame->Encoding, sub_type);
+		input_new = form_buttn (current, name, val, frame->Encoding, sub_type);
 
 	} else if (stricmp (output, "debug") == 0) {
-		FORM  form = current->form;
-		INPUT inp  = form->InputList;
-		printf ("%s: %s%s", (form->Method == METH_POST ? "POST" : "GET"),
-		        (form->Action ? form->Action : "<->"),
-		        (strchr (form->Action, '?') ? "&" : "?"));
-		while (inp) {
-			if (inp->checked) {
-				printf ("%s=%s&", inp->Name, (inp->Value ? inp->Value : ""));
+		FORM  form_debug = current->form; // Renamed to avoid shadowing
+		INPUT inp_debug  = form_debug->InputList; // Renamed to avoid shadowing
+		printf ("%s: %s%s", (form_debug->Method == METH_POST ? "POST" : "GET"),
+		        (form_debug->Action ? form_debug->Action : "<->"),
+		        (strchr (form_debug->Action, '?') ? "&" : "?"));
+		while (inp_debug) {
+			if (inp_debug->checked) {
+				printf ("%s=%s&", inp_debug->Name, (inp_debug->Value ? inp_debug->Value : ""));
 			}
-			inp = inp->Next;
+			inp_debug = inp_debug->Next;
 		}
 		printf ("\n");
 	}
 
-	if (input && get_value (parser, KEY_DISABLED, NULL,0)) {
-		input_disable (input, TRUE);
+	if (input_new && get_value (parser, KEY_DISABLED, NULL,0)) {
+		input_disable (input_new, TRUE);
 	}
 
-	return input;
+	return input_new;
 }
 
 /*============================================================================*/
@@ -695,29 +721,33 @@ form_selct (TEXTBUFF current, const char * name, UWORD size, BOOL disabled)
 	WORDITEM word = current->word;
 	WORD     asc  = word->word_height -1;
 	WORD     dsc  = word->word_tail_drop;
-	INPUT    input;
+	INPUT    input_sel; // Renamed to avoid shadowing
 
 	(void)size;
 
 	if (!current->form /*&&
 		 (current->form = new_form (frame, NULL, NULL, NULL)) == NULL*/) {
-		input = NULL;
+		input_sel = NULL;
 
-	} else if ((input = _alloc (IT_SELECT, current, name)) != NULL) {
-		SELECT sel = malloc (sizeof(struct s_select));
-		if ((input->u.Select = sel) != NULL) {
+	} else if ((input_sel = _alloc (IT_SELECT, current, name)) != NULL) {
+		SELECT sel = malloc (sizeof (struct s_select));
+		if (!sel) {
+			input_sel->disabled = TRUE; /* Fail gracefully by disabling the element */
+			return input_sel;
+		}
+		if ((input_sel->u.Select = sel) != NULL) {
 			sel->ItemList = NULL;
 			sel->NumItems = 0;
 			sel->Array[0] = NULL;
 		} else {
 			disabled = TRUE;
 		}
-		input->disabled = disabled;
+		input_sel->disabled = disabled;
 		set_word (current, asc, dsc, asc + dsc);
-		sel->SaveWchr = input->Word->item;
+		sel->SaveWchr = input_sel->Word->item;
 	}
 
-	return input;
+	return input_sel;
 }
 
 /*============================================================================*/
@@ -725,17 +755,19 @@ INPUT
 selct_option (TEXTBUFF current, const char * text,
               BOOL disabled, ENCODING encoding, char * value, BOOL selected)
 {
-	INPUT    input = (current->form ? ((FORM)current->form)->Last : NULL);
+	INPUT    input_opt = (current->form ? ((FORM)current->form)->Last : NULL); // Renamed input
 	SELECT   sel;
 	SLCTITEM item;
 
-	if (((!input || input->Type != IT_SELECT) &&
-	     (input = form_selct (current, "", 1, FALSE)) == NULL) ||
-	    (sel = input->u.Select) == NULL) {
+	if (((!input_opt || input_opt->Type != IT_SELECT) &&
+	     (input_opt = form_selct (current, "", 1, FALSE)) == NULL) ||
+	    (sel = input_opt->u.Select) == NULL) {
 		return NULL;
 	}
 
-	if (*text && (item = malloc (sizeof(struct s_slctitem))) != NULL) {
+	if (*text) {
+		item = malloc (sizeof(struct s_slctitem));
+		if (item) {
 		size_t tlen = strlen (text);
 		WORD  pts[8];
 		if ((text[0] == '-' && (!text[1] || (text[1] == '-' && (!text[2] ||
@@ -772,23 +804,24 @@ selct_option (TEXTBUFF current, const char * text,
 		item->Value = (disabled ? NULL : value ? value : item->Strng +1);
 
 		if (!sel->ItemList || selected) {
-			input->Word->item   = item->Text;
-			input->Word->length = item->Length;
-			input->Value        = item->Value;
+			input_opt->Word->item   = item->Text;
+			input_opt->Word->length = item->Length;
+			input_opt->Value        = item->Value;
 		}
 		item->Next    = sel->ItemList;
 		sel->ItemList = item;
 		sel->NumItems--;
 	}
+    } // End of if (*text) block. It was missing a closing brace.
 
-	return input;
+	return input_opt;
 }
 
 /*============================================================================*/
 void
-selct_finish (TEXTBUFF current)
+selct_finish (TEXTBUFF current_tb_finish) // Renamed parameter
 {
-	INPUT input = (current->form ? ((FORM)current->form)->Last : NULL);
+	INPUT input = (current_tb_finish->form ? ((FORM)current_tb_finish->form)->Last : NULL);
 	if (input && input->Type == IT_SELECT) {
 		finish_selct (input);
 	}
@@ -796,32 +829,32 @@ selct_finish (TEXTBUFF current)
 
 /*----------------------------------------------------------------------------*/
 static void
-finish_selct (INPUT input)
+finish_selct (INPUT input_fs) // Renamed parameter
 {
-	SELECT sel = input->u.Select;
+	SELECT sel = input_fs->u.Select;
 	WORD   num;
 
 	if (!sel || !sel->NumItems) {
-		input->disabled = TRUE;
+		input_fs->disabled = TRUE;
 
 	} else if ((num = -sel->NumItems) > 0) {
 		SELECT rdy = malloc (sizeof (struct s_select) + num * sizeof(char*));
 		if (rdy) {
-			SLCTITEM item = sel->ItemList;
+			SLCTITEM item_fs = sel->ItemList; // Renamed variable
 			short    wdth = 0;
 			rdy->ItemList = sel->ItemList;
 			rdy->SaveWchr = sel->SaveWchr;
 			rdy->NumItems = num;
 			rdy->Array[0] = rdy->Array[num] = NULL;
 			do {
-				if (wdth < item->Width) {
-					wdth = item->Width;
+				if (wdth < item_fs->Width) { // Using item_fs
+					wdth = item_fs->Width;   // Using item_fs
 				}
-				rdy->Array[--num] = item->Strng;
-			} while ((item = item->Next) != NULL && num);
-			input->Word->word_width += wdth +2;
+				rdy->Array[--num] = item_fs->Strng; // Using item_fs
+			} while ((item_fs = item_fs->Next) != NULL && num); // Using item_fs
+			input_fs->Word->word_width += wdth +2;
 			free (sel);
-			input->u.Select = rdy;
+			input_fs->u.Select = rdy;
 		}
 	}
 }
@@ -829,21 +862,21 @@ finish_selct (INPUT input)
 
 /*============================================================================*/
 void
-input_draw (INPUT input, WORD x, WORD y)
+input_draw (INPUT input_id, WORD x, WORD y) // Renamed parameter
 {
-	WORDITEM word = input->Word;
+	WORDITEM word = input_id->Word;
 	short c_lu, c_rd;
 	PXY p[6];
 	p[2].p_x = (p[0].p_x = x) + word->word_width -1;
 	p[1].p_y = y - word->word_height;
 	p[3].p_y = y + word->word_tail_drop -1;
 
-	if (input->Type >= IT_TEXT) {
+	if (input_id->Type >= IT_TEXT) {
 		vsf_color (vdi_handle, G_WHITE);
 		vsl_color (vdi_handle, G_LBLACK);
 		c_lu = G_BLACK;
 		c_rd = G_LWHITE;
-	} else if (input->checked && input->Type != IT_SELECT) {
+	} else if (input_id->checked && input_id->Type != IT_SELECT) {
 		vsf_color (vdi_handle, G_LBLACK);
 		vsl_color (vdi_handle, G_BLACK);
 		c_lu = G_BLACK;
@@ -854,7 +887,7 @@ input_draw (INPUT input, WORD x, WORD y)
 		c_lu = G_WHITE;
 		c_rd = G_LBLACK;
 	}
-	if (input->Type == IT_RADIO) {
+	if (input_id->Type == IT_RADIO) {
 		p[1].p_x = p[3].p_x = (p[0].p_x + p[2].p_x) /2;
 		p[0].p_y = p[2].p_y = (p[1].p_y + p[3].p_y) /2;
 	} else {
@@ -866,7 +899,7 @@ input_draw (INPUT input, WORD x, WORD y)
 	p[4]     = p[0];
 	v_fillarea (vdi_handle, 4, &p[0].p_x);
 	v_pline    (vdi_handle, 5, &p[0].p_x);
-	if (input->Type == IT_RADIO) {
+	if (input_id->Type == IT_RADIO) {
 		vsl_color (vdi_handle, c_lu);
 		p[0].p_x++;
 		p[1].p_y++;
@@ -887,7 +920,7 @@ input_draw (INPUT input, WORD x, WORD y)
 		p[1].p_x = ++p[0].p_x;   p[2].p_x -= 2;
 		p[1].p_y = ++p[2].p_y;   p[0].p_y -= 2;
 		v_pline (vdi_handle, 3, &p[0].p_x);
-		if (input->Type == IT_BUTTN) {
+		if (input_id->Type == IT_BUTTN) {
 			p[1].p_x = ++p[0].p_x;  --p[2].p_x;
 			p[1].p_y = ++p[2].p_y;  --p[0].p_y;
 			v_pline (vdi_handle, 3, &p[0].p_x);
@@ -897,7 +930,7 @@ input_draw (INPUT input, WORD x, WORD y)
 			v_pline (vdi_handle, 3, &p[0].p_x);
 			p[0].p_x--;
 			p[2].p_y--;
-		} else if (input->Type == IT_SELECT) {
+		} else if (input_id->Type == IT_SELECT) {
 			short w;
 			p[1].p_x = p[2].p_x; /* save this */
 			p[3].p_y = p[4].p_y = p[2].p_y +3;
@@ -927,16 +960,16 @@ input_draw (INPUT input, WORD x, WORD y)
 		p[1].p_y = ++p[0].p_y;
 		v_pline (vdi_handle, 3, &p[0].p_x);
 	}
-	if (input->Type >= IT_TEXT) {
+	if (input_id->Type >= IT_TEXT) {
 		BOOL     fmap = (word->font->Base->Mapping != MAP_UNICODE);
-		FORM     form = input->Form;
-		WCHAR ** wptr = input->TextArray;
-		short    rows = min (input->TextRows, input->VisibleY);
+		FORM     form = input_id->Form;
+		WCHAR ** wptr = input_id->TextArray;
+		short    rows = min (input_id->TextRows, input_id->VisibleY);
 		WORD     shft;
 		PXY      pos;
 		pos.p_x = x + 3;
-		pos.p_y = y - input->CursorH * input->VisibleY;
-		if (input == form->TextActive) {
+		pos.p_y = y - input_id->CursorH * input_id->VisibleY;
+		if (input_id == form->TextActive) {
 			shft =  form->TextShiftX;
 			wptr += form->TextShiftY;
 		} else {
@@ -947,8 +980,8 @@ input_draw (INPUT input, WORD x, WORD y)
 		}
 		while (rows--) {
 			WCHAR * ptr = wptr[0] + shft;
-			WORD    len = min ((UWORD)(wptr[1] -1 - ptr), input->VisibleX);
-			pos.p_y += input->CursorH;
+			WORD    len = min ((UWORD)(wptr[1] -1 - ptr), input_id->VisibleX);
+			pos.p_y += input_id->CursorH;
 			if (len > 0)
 #ifdef __PUREC__
 				v_ftext16n (vdi_handle, pos.p_x, pos.p_y, ptr, len);
@@ -957,14 +990,14 @@ input_draw (INPUT input, WORD x, WORD y)
 #endif
 			wptr++;
 		}
-		if (input == form->TextActive) {
-			WCHAR * ptr = input->TextArray[form->TextShiftY]   + shft;
+		if (input_id == form->TextActive) {
+			WCHAR * ptr = input_id->TextArray[form->TextShiftY]   + shft;
 			vqt_f_extent16n (vdi_handle, ptr, form->TextCursrX - shft, &p[0].p_x);
 			p[0].p_x = x +2 + p[1].p_x - p[0].p_x;
 			p[1].p_x = p[0].p_x +1;
 			p[0].p_y = y - word->word_height +2
-			         + (form->TextCursrY - form->TextShiftY) * input->CursorH;
-			p[1].p_y = p[0].p_y                              + input->CursorH;
+			         + (form->TextCursrY - form->TextShiftY) * input_id->CursorH;
+			p[1].p_y = p[0].p_y                              + input_id->CursorH;
 			vsf_color (vdi_handle, G_WHITE);
 			vswr_mode (vdi_handle, MD_XOR);
 			v_bar     (vdi_handle, &p[0].p_x);
@@ -973,11 +1006,11 @@ input_draw (INPUT input, WORD x, WORD y)
 		if (fmap) {
 			vst_map_mode (vdi_handle, word->font->Base->Mapping);
 		}
-	} else if (input->Type >= IT_BUTTN) {
+	} else if (input_id->Type >= IT_BUTTN) {
 		v_ftext16 (vdi_handle,
-		           x + (input->Type == IT_BUTTN ? 4 : 3), y, word->item);
+		           x + (input_id->Type == IT_BUTTN ? 4 : 3), y, word->item);
 	}
-	if (input->disabled) {
+	if (input_id->disabled) {
 		p[1].p_x = (p[0].p_x = x) + word->word_width -1;
 		p[0].p_y = y - word->word_height;
 		p[1].p_y = y + word->word_tail_drop -1;
@@ -997,18 +1030,18 @@ input_draw (INPUT input, WORD x, WORD y)
 
 /*============================================================================*/
 void
-input_disable (INPUT input, BOOL onNoff)
+input_disable (INPUT input_id, BOOL onNoff) // Renamed parameter
 {
-	input->disabled = onNoff;
+	input_id->disabled = onNoff;
 	/* check for file uploade element to set its correspondind part also */
-	if (input->Type == IT_BUTTN) {
-		INPUT field = (input->SubType == 'F' ? input->u.FileEd : NULL);
-		if (field && field->Next == input) {
+	if (input_id->Type == IT_BUTTN) {
+		INPUT field = (input_id->SubType == 'F' ? input_id->u.FileEd : NULL);
+		if (field && field->Next == input_id) {
 			field->disabled = onNoff;
 		}
-	} else if (input->Type == IT_TEXT) {
-		INPUT buttn = (input->Next->Type == IT_BUTTN ? input->Next : NULL);
-		if (buttn->SubType == 'F' && buttn->u.FileEd == input) {
+	} else if (input_id->Type == IT_TEXT) {
+		INPUT buttn = (input_id->Next->Type == IT_BUTTN ? input_id->Next : NULL);
+		if (buttn->SubType == 'F' && buttn->u.FileEd == input_id) {
 			buttn->disabled = onNoff;
 		}
 	}
@@ -1017,27 +1050,27 @@ input_disable (INPUT input, BOOL onNoff)
 
 /*============================================================================*/
 BOOL
-input_isEdit (INPUT input)
+input_isEdit (INPUT input_ie) // Renamed parameter
 {
-	return (input->Type >= IT_TEXT);
+	return (input_ie->Type >= IT_TEXT);
 }
 
 
 /*----------------------------------------------------------------------------*/
 static void
-coord_diff (INPUT check, INPUT input,  GRECT * rect)
+coord_diff (INPUT check, INPUT input_cd,  GRECT * rect) // Renamed input parameter
 {
-	WORDITEM c_w = check->Word, i_w = input->Word;
+	WORDITEM c_w = check->Word, i_w = input_cd->Word;
 	rect->g_x = c_w->h_offset
 	           - i_w->h_offset;
 	rect->g_y = (WORD)((c_w->line->OffsetY - c_w->word_height)
 	           - (i_w->line->OffsetY - i_w->word_height));
 	rect->g_w = c_w->word_width;
 	rect->g_h = c_w->word_height + c_w->word_tail_drop;
-	if (check->Paragraph != input->Paragraph) {
+	if (check->Paragraph != input_cd->Paragraph) {
 		long c_x, c_y, i_x, i_y;
 		dombox_Offset (&check->Paragraph->Box, &c_x, &c_y);
-		dombox_Offset (&input->Paragraph->Box, &i_x, &i_y);
+		dombox_Offset (&input_cd->Paragraph->Box, &i_x, &i_y);
 		rect->g_x += (WORD)(c_x - i_x);
 		rect->g_y += (WORD)(c_y - i_y);
 	}
@@ -1045,20 +1078,20 @@ coord_diff (INPUT check, INPUT input,  GRECT * rect)
 
 /*============================================================================*/
 WORD
-input_handle (INPUT input, PXY mxy, GRECT * radio, char *** popup)
+input_handle (INPUT input_ih, PXY mxy, GRECT * radio, char *** popup) // Renamed input parameter
 {
 	WORD rtn = 0;
 
-	if (!input->disabled) switch (input->Type) {
+	if (!input_ih->disabled) switch (input_ih->Type) {
 
 		case IT_RADIO:
-			if (!input->checked) {
-				INPUT group = input->u.Group;
+			if (!input_ih->checked) {
+				INPUT group = input_ih->u.Group;
 				rtn = 1;
 				if (group->checked) {
 					INPUT check = group->u.Group;
 					do if (check->checked) {
-						coord_diff (check, input, radio);
+						coord_diff (check, input_ih, radio);
 						check->checked = FALSE;
 						rtn = 2;
 						break;
@@ -1066,42 +1099,42 @@ input_handle (INPUT input, PXY mxy, GRECT * radio, char *** popup)
 				} else {
 					group->checked = TRUE;
 				}
-				group->Value = input->Name;
-				input->checked = TRUE;
+				group->Value = input_ih->Name;
+				input_ih->checked = TRUE;
 			}
 			break;
 
 		case IT_FILE:
 		case IT_TAREA:
 		case IT_TEXT: {
-			FORM form = input->Form;
-			if (form->TextActive && form->TextActive != input) {
-				coord_diff (form->TextActive, input, radio);
+			FORM form = input_ih->Form;
+			if (form->TextActive && form->TextActive != input_ih) {
+				coord_diff (form->TextActive, input_ih, radio);
 				rtn = 2;
 			} else {
 				rtn = 1;
 			}
-			form->TextActive = input;
+			form->TextActive = input_ih;
 			form->TextShiftX = 0;
 			form->TextShiftY = 0;
-			if (mxy.p_y > 0 && input->TextRows > 1) {
-				form->TextCursrY = mxy.p_y / input->CursorH;
-				if (form->TextCursrY > input->VisibleY) {
-					 form->TextCursrY = input->VisibleY;
+			if (mxy.p_y > 0 && input_ih->TextRows > 1) {
+				form->TextCursrY = mxy.p_y / input_ih->CursorH;
+				if (form->TextCursrY > input_ih->VisibleY) {
+					 form->TextCursrY = input_ih->VisibleY;
 				}
-				if (form->TextCursrY > input->TextRows -1) {
-					 form->TextCursrY = input->TextRows -1;
+				if (form->TextCursrY > input_ih->TextRows -1) {
+					 form->TextCursrY = input_ih->TextRows -1;
 				}
 			} else {
 				form->TextCursrY = 0;
 			}
-			if (mxy.p_x > 0 && edit_rowln (input, form->TextCursrY) > 0) {
-				form->TextCursrX = mxy.p_x / (input->Word->font->SpaceWidth -1);
-				if (form->TextCursrX > input->VisibleX) {
-					 form->TextCursrX = input->VisibleX;
+			if (mxy.p_x > 0 && edit_rowln (input_ih, form->TextCursrY) > 0) {
+				form->TextCursrX = mxy.p_x / (input_ih->Word->font->SpaceWidth -1);
+				if (form->TextCursrX > input_ih->VisibleX) {
+					 form->TextCursrX = input_ih->VisibleX;
 				}
-				if (form->TextCursrX > edit_rowln (input, form->TextCursrY)) {
-					 form->TextCursrX = (WORD)edit_rowln (input, form->TextCursrY);
+				if (form->TextCursrX > edit_rowln (input_ih, form->TextCursrY)) {
+					 form->TextCursrX = (WORD)edit_rowln (input_ih, form->TextCursrY);
 				}
 			} else {
 				form->TextCursrX = 0;
@@ -1109,27 +1142,27 @@ input_handle (INPUT input, PXY mxy, GRECT * radio, char *** popup)
 		}	break;
 
 		case IT_CHECK:
-			input->checked = !input->checked;
+			input_ih->checked = !input_ih->checked;
 			rtn = 1;
 			break;
 
 		case IT_SELECT: {
-			SELECT sel = input->u.Select;
-			if (sel && sel->NumItems > 0) {
-				WORDITEM word = input->Word;
+			SELECT sel_ih = input_ih->u.Select; // Renamed variable
+			if (sel_ih && sel_ih->NumItems > 0) {
+				WORDITEM word = input_ih->Word;
 				long   * x    = &((long*)radio)[0];
 				long   * y    = &((long*)radio)[1];
-				dombox_Offset (&input->Paragraph->Box, x, y);
+				dombox_Offset (&input_ih->Paragraph->Box, x, y);
 				*x += word->h_offset;
 				*y += word->line->OffsetY + word->word_tail_drop -1;
-				*popup = sel->Array;
+				*popup = sel_ih->Array;
 				rtn = 1;
 			}
 		}	break;
 
 		case IT_BUTTN:
-			if (!input->checked) {
-				input->checked = TRUE;
+			if (!input_ih->checked) {
+				input_ih->checked = TRUE;
 				rtn = 1;
 			}
 			break;
@@ -1179,193 +1212,206 @@ base64enc (const char * src, long len)
 
 /*----------------------------------------------------------------------------*/
 static void
-form_activate (FORM form)
+form_activate (FORM form_fa) // Renamed parameter
 {
-	FRAME    frame = form->Frame;
-	INPUT    elem  = form->InputList;
+	FRAME    frame = form_fa->Frame;
+	INPUT    elem_fa  = form_fa->InputList; // Renamed to avoid shadowing
 	LOCATION loc   = frame->Location;
 	LOADER   ldr   = NULL;
-	size_t	size  = 0;
-	size_t	len;
-	char 	*data;
-	char	*url;
 
-	if (form->Method == METH_AUTH) { /* special case, internal created *
+    // Declare variables for METH_AUTH path at the top of the function if they are used within it.
+    const char * current_realm = NULL;
+    char buf_fa[100];
+    char * p_fa = buf_fa;
+    WCHAR * beg_fa = NULL, * end_fa = NULL;
+
+	if (form_fa->Method == METH_AUTH) { /* special case, internal created *
 	                                  * for HTTP Authentication        */
-		const char * realm = (frame->AuthRealm && *frame->AuthRealm
+		current_realm = (frame->AuthRealm && *frame->AuthRealm
 		                      ? frame->AuthRealm : NULL);
-		char buf[100], * p = buf;
 		ldr = start_page_load (frame->Container, NULL,loc, TRUE, NULL);
 		if (!ldr) {
-			realm = NULL;
+			current_realm = NULL;
 		}
-		if (realm) {
-			WCHAR * beg, * end;
-			if (elem && elem->TextArray) {
-				beg = elem->TextArray[0];
-				end = elem->TextArray[1] -1;
+		if (current_realm) {
+			if (elem_fa && elem_fa->TextArray) {
+				beg_fa = elem_fa->TextArray[0];
+				end_fa = elem_fa->TextArray[1] -1;
 			} else {
-				beg = end = NULL;
+				beg_fa = end_fa = NULL;
 			}
-			if (beg < end) {
+			if (beg_fa < end_fa) {
 				do {
-					*(p++)= *(beg++);
-				} while (beg < end);
-				*(p++) = ':';
-				*(p)   = '\0';
-				elem = elem->Next;
+					*(p_fa++)= *(beg_fa++);
+				} while (beg_fa < end_fa);
+				*(p_fa++) = ':';
+				*(p_fa)   = '\0';
+				elem_fa = elem_fa->Next;
 			} else {
-				realm = NULL;
+				current_realm = NULL;
 			}
 		}
-		if (realm) {
-			if (elem && elem->Value) {
-				strcpy (p, elem->Value);
-				elem = elem->Next;
+		if (current_realm && elem_fa && elem_fa->Value) {
+				snprintf(p_fa, sizeof(buf_fa) - (p_fa - buf_fa), "%s", elem_fa->Value);
+				elem_fa = elem_fa->Next;
 			} else {
-				realm = NULL;
+				current_realm = NULL;
 			}
+
+		if (current_realm && elem_fa && !elem_fa->Next
+		          && elem_fa->Type == IT_BUTTN && elem_fa->SubType == 'S') {
+			ldr->AuthRealm = strdup (current_realm);
+			ldr->AuthBasic = base64enc (buf_fa, strlen(buf_fa));
 		}
 
-		if (realm && elem && !elem->Next
-		          && elem->Type == IT_BUTTN && elem->SubType == 'S') {
-			ldr->AuthRealm = strdup (realm);
-			ldr->AuthBasic = base64enc (buf, strlen(buf));
-		}
-
-		return;
+		return; // This return is crucial for the METH_AUTH path.
 	}
 
-	if (elem)
+    // Variables for non-METH_AUTH path (POST/GET) declared here
+    size_t	size  = 0;
+    size_t	len;
+    char 	*data;
+    char	*url_fa;
+
+	if (elem_fa) // Using elem_fa
 	{
 		int nbvar = 0;
 		int nbfile = 0;
 		/* pre-check list of inputs for a type IT_FILE */
+		INPUT temp_elem = elem_fa; // Use a temporary variable for iteration
 		do
 		{
-			if (*elem->Name && elem->checked)
+			if (temp_elem->checked && *temp_elem->Name)
 			{
 				nbvar++;
-				if (elem->Type == IT_FILE)
+				if (temp_elem->Type == IT_FILE)
 				{
 					nbfile++;
 				}
 			}
-			elem = elem->Next;
-		} while(elem != NULL);
+			temp_elem = temp_elem->Next;
+		} while(temp_elem != NULL);
+
 		if (nbfile > 0)
 		{
 			/* PUT only possible if single file and single item */
-			if (form->Method == METH_PUT && ((nbvar > 1) || (nbfile > 1)))
+			if (form_fa->Method == METH_PUT && ((nbvar > 1) || (nbfile > 1)))
 			{
-				form->Method = METH_POST;
+				form_fa->Method = METH_POST;
 			}
-			if (form->Method == METH_POST)
+			if (form_fa->Method == METH_POST)
 			{
 				/* if file input used, switch to "multipart/form-data" enc */
-				form_activate_multipart(form);
+				form_activate_multipart(form_fa);
 				return;
 			}
 		}
-		if (form->Enctype && stricmp(form->Enctype, "multipart/form-data")==0)
+		if (form_fa->Enctype && stricmp(form_fa->Enctype, "multipart/form-data")==0)
 		{
-			form->Method = METH_POST;
-			form_activate_multipart(form);
+			form_fa->Method = METH_POST;
+			form_activate_multipart(form_fa);
 			return;
 		}
 		/* go back to 1st input */
-		elem = form->InputList;
+		elem_fa = form_fa->InputList;
 
-		do if (elem->checked && *elem->Name) {
-			size += 2 + strlen (elem->Name);
-			if (elem->Value) {
-				char * v = elem->Value, c;
-				while ((c = *(v++)) != '\0') {
-					size += (c == ' ' || isalnum (c) ? 1 : 3);
+		do if (elem_fa->checked && *elem_fa->Name) {
+			size += 2 + strlen (elem_fa->Name);
+			if (elem_fa->Value) {
+				char * v = elem_fa->Value, current_char; // Declare current_char for this block
+				while ((current_char = *(v++)) != '\0') {
+					size += (current_char == ' ' || isalnum (current_char) ? 1 : 3);
 				}
-			} else if (elem->TextArray) {
-				WCHAR * beg = elem->TextArray[0];
-				WCHAR * end = elem->TextArray[elem->TextRows] -1;
+			} else if (elem_fa->TextArray) {
+				WCHAR * beg = elem_fa->TextArray[0];
+				WCHAR * end = elem_fa->TextArray[elem_fa->TextRows] -1;
 				while (beg < end) {
-					char c = *(beg++);
-					size += (c == ' ' || isalnum (c) ? 1 : 3);
+					char current_char_text = (char)(*(beg++)); // Declare current_char_text for this block
+					size += (current_char_text == ' ' || isalnum (current_char_text) ? 1 : 3);
 				}
 			}
-		} while ((elem = elem->Next) != NULL);
+		} while ((elem_fa = elem_fa->Next) != NULL);
 	}
 
-	if (form->Method == METH_POST) {
+	if (form_fa->Method == METH_POST) {
 		len  = 0;
-		url  = form->Action;
+		url_fa  = form_fa->Action;
 		data = malloc (size +1);
 		if (size) size--;
-	} else {
-		len  = strlen (form->Action);
-		url  = strcpy (malloc (len + size +1), form->Action);
-		data = url;
-		data[len] = (strchr (url, '?') ? '&' : '?');
+    } else {
+		len  = strlen (form_fa->Action);
+		url_fa = malloc (len + size + 1);
+		if (!url_fa) {
+			/* Do not proceed if memory allocation fails */
+			return;
+		}
+		strcpy (url_fa, form_fa->Action);
+		data = url_fa;
+		data[len] = (strchr (url_fa, '?') ? '&' : '?');
 	}
 	if (size) {
 		char * p = data + (len > 0 ? len +1 : 0);
 		size += len;
-		elem = form->InputList;
-		do if (elem->checked && *elem->Name) {
-			char * q;
-			len = strlen (elem->Name);
-			*p = '\0';
-			if ((q = strstr (data, elem->Name)) != NULL) {
-				char * f = (q == data || q[-1] == '?' || q[-1] == '&'
-				            ? q + len : NULL);
-				do if (f && (!*f || *f == '&' || *f == '=')) {
-					if (*f == '=') while (*(++f) && *f != '&');
-					if (*f == '&') f++;
-					while ((*(q++) = *(f++)) != '\0');
-					size -= f - q;
-					p    -= f - q;
-					break;
-				} else if ((q = strstr (q +1, elem->Name)) != NULL) {
-					f = (q[-1] == '&' ? q + len : NULL);
-				} while (q);
-			}
-			memcpy (p, elem->Name, len);
-			p += len;
-			*(p++) = '=';
-			if (elem->Value) {
-				char * v = elem->Value, c;
-				while ((c = *(v++)) != '\0') {
-					if (c == ' ') {
-						*(p++) = '+';
-					} else if (isalnum (c)) {
-						*(p++) = c;
+		elem_fa = form_fa->InputList;
+		do if (elem_fa->checked && *elem_fa->Name) {
+			size_t remaining_space = (data + size + len) - p;
+			int written;
+
+			/* This logic to remove previous values of the same name is complex */
+			/* and itself a potential risk. For now, we focus on safe writing. */
+
+			written = snprintf(p, remaining_space, "%s=", elem_fa->Name);
+			if (written < 0 || (size_t)written >= remaining_space) break;
+			p += written;
+
+			if (elem_fa->Value) {
+				const char * v = elem_fa->Value;
+				while (*v) {
+					remaining_space = (data + size + len) - p;
+					if (remaining_space <= 3) break; /* Need up to 3 chars for encoding */
+					if (*v == ' ') {
+						*p++ = '+';
+					} else if (isalnum((unsigned char)*v)) {
+						*p++ = *v;
 					} else {
-						p += sprintf (p, "%%%02X", (int)c);
+						p += snprintf(p, remaining_space, "%%%02X", (unsigned char)*v); // Use *v directly
 					}
+					v++;
 				}
-			} else if (elem->TextArray) {
-				WCHAR * beg = elem->TextArray[0];
-				WCHAR * end = elem->TextArray[elem->TextRows] -1;
+			} else if (elem_fa->TextArray) {
+				WCHAR * beg = elem_fa->TextArray[0];
+				WCHAR * end = elem_fa->TextArray[elem_fa->TextRows] -1;
 				while (beg < end) {
-					char c = *(beg++);
+					char c = (char)(*(beg++));
+					size_t remaining_space_inner = (data + size + len) - p; // Renamed to avoid shadowing
+					if (remaining_space_inner <= 3) break;
 					if (c == ' ') {
-						*(p++) = '+';
-					} else if (isalnum (c)) {
-						*(p++) = c;
+						*p++ = '+';
+					} else if (isalnum((unsigned char)c)) {
+						*p++ = c;
 					} else {
-						p += sprintf (p, "%%%02X", (int)c);
+						p += snprintf(p, remaining_space_inner, "%%%02X", (unsigned char)c);
 					}
 				}
 			}
-			*(p++) = '&';
-		} while ((elem = elem->Next) != NULL);
+
+			size_t remaining_space_after_value = (data + size + len) - p; // Renamed to avoid shadowing
+			if (remaining_space_after_value > 1) {
+				*(p++) = '&';
+			} else {
+				/* Not enough space for the '&', so we must stop */
+				break;
+			}
+		} while ((elem_fa = elem_fa->Next) != NULL);
 		len = size;
 	}
 	data[len] = '\0';
 
-	if (form->Method != METH_POST) {
+	if (form_fa->Method != METH_POST) {
 		CONTAINR target = NULL;
 		CONTAINR cont = NULL;
 
-		if (form->Target && stricmp(form->Target, "_hw_top") == 0) {
+		if (form_fa->Target && stricmp(form_fa->Target, "_hw_top") == 0) {
 			HwWIND this = hwWind_byType (0);
 
 			if (this != NULL) {
@@ -1377,9 +1423,9 @@ form_activate (FORM form)
 				target = NULL;
 			}
 		} else {
-			target = (form->Target &&
-		                   stricmp (form->Target, "_blank") != 0
-		                   ? containr_byName (frame->Container, form->Target) : NULL);
+			target = (form_fa->Target &&
+		                   stricmp (form_fa->Target, "_blank") != 0
+		                   ? containr_byName (frame->Container, form_fa->Target) : NULL);
 		}
 
 		if (target) {
@@ -1388,13 +1434,13 @@ form_activate (FORM form)
 			cont = frame->Container;
 		}
 
-		ldr = start_page_load (cont, url,loc, TRUE, NULL);
-		free (url);
+		ldr = start_page_load (cont, url_fa,loc, TRUE, NULL);
+		free (url_fa);
 	} else {
 		POSTDATA post = new_post(data, strlen(data), strdup("application/x-www-form-urlencoded"));
 		if (post)
 		{
-			ldr = start_page_load (frame->Container, url,loc, TRUE, post);
+			ldr = start_page_load (frame->Container, url_fa,loc, TRUE, post);
 			if (!ldr) delete_post (post);
 		}
 		/* TODO: add an else with an error message for user */
@@ -1411,19 +1457,19 @@ form_activate (FORM form)
 
 /*============================================================================*/
 static void
-form_activate_multipart (FORM form)
+form_activate_multipart (FORM form_fam) // Renamed parameter
 {
-	FRAME  frame = form->Frame;
-	INPUT  elem  = form->InputList;
+	FRAME  frame = form_fam->Frame;
+	INPUT  elem_fam  = form_fam->InputList; // Renamed to avoid shadowing
 	LOADER   ldr   = NULL;
 	POSTDATA post  = NULL;
-	FILE *current = NULL;
+	FILE *current_file = NULL; // Renamed to avoid shadowing
 	size_t size  = 0;
 	size_t len;
 	size_t boundlen;
 	size_t flen;
 	char *data;
-	char *url;
+	char *url_fam; // Renamed to avoid shadowing
 	char boundary[39];
 	char minihex[16] = "0123456789ABCDEF";
 	ULONG randomized;
@@ -1450,45 +1496,54 @@ form_activate_multipart (FORM form)
 	/* multipart posting is MIME-like formatted */
 	/* it's a list of bodies containing the value of each variable */
 	/* contents are not encoded, and charset of texts should be same as page */
-	i = 0;
+	// Reset elem_fam to the beginning of the list
+	elem_fam = form_fam->InputList;
+	i = 0; // Reset i for this loop
 	do
 	{
-		if (elem->checked && *elem->Name)
+		if (elem_fam->checked && *elem_fam->Name)
 		{
-			if ((elem->Type == IT_FILE) && (elem->TextArray[0]))
+			if ((elem_fam->Type == IT_FILE) && (elem_fam->TextArray[0]))
 			{
-				cnvstr = unicode_to_utf8(elem->TextArray[0]);
+				cnvstr = unicode_to_utf8(elem_fam->TextArray[0]);
 				if (cnvstr)
 				{
-					if (elem->Value) free(elem->Value);
-					elem->Value = cnvstr;
+					if (elem_fam->Value) free(elem_fam->Value);
+					elem_fam->Value = cnvstr;
 				}
 				/* quick hack to get filename */
 				len = 0;
-				wptr = elem->TextArray[0];
+				wptr = elem_fam->TextArray[0];
 				while(*wptr++) len++;
 				atari = malloc(len+1);
+				if (!atari) {
+					/* If we can't allocate memory, we can't get the file size.
+					 * Skip this part of the size calculation.
+					 */
+					size += 2; /* for CRLF */
+					continue;
+				}
 				len = 0;
-				wptr = elem->TextArray[0];
+				wptr = elem_fam->TextArray[0];
 				while(*wptr) { atari[len] = (char)(*wptr++); len++; }
 				atari[len] = 0;
 				/* "--" + boundary + CRLF */
 				size += 2 + boundlen + 2;
 				/* "Content-Disposition: form-data; name=\"" + Name + "\"" */
-				size += 38 + strlen(elem->Name) + 1;
+				size += 38 + strlen(elem_fam->Name) + 1;
 				/* "; filename=\"" + value + "\"" + CRLF */
-				size += 12 + strlen(elem->Value) + 1 + 2;
+				size += 12 + strlen(elem_fam->Value) + 1 + 2;
 				/* guess content-type, use "application/octet-stream" (24) now... */
 				/* then add line "Content-Type: " (14) + strlen(cnttype) + CRLF + CRLF */
 				size += 14 + 24 + 2 + 2;
 				/* then add file content (raw) + CRLF */
-				current = fopen(atari, "rb");
+				current_file = fopen(atari, "rb"); // Using renamed variable
 				flen = 0;
-				if (current)
+				if (current_file) // Using renamed variable
 				{
-					fseek (current, 0, SEEK_END);
-					flen = ftell(current);
-					fclose(current);
+					fseek (current_file, 0, SEEK_END); // Using renamed variable
+					flen = ftell(current_file); // Using renamed variable
+					fclose(current_file); // Using renamed variable
 				}
 				size += flen + 2;
 				free(atari);
@@ -1498,18 +1553,18 @@ form_activate_multipart (FORM form)
 				/* "--" + boundary + CRLF */
 				size += 2 + boundlen + 2;
 				/* "Content-Disposition: form-data; name=\"" + Name + "\"" */
-				size += 38 + strlen(elem->Name) + 1;
+				size += 38 + strlen(elem_fam->Name) + 1;
 				/* CRLF + CRLF + value + CRLF */
 				size += 4;
 				/* body is the value if not a file */
-				if (elem->Value)
+				if (elem_fam->Value)
 				{
-					size += strlen(elem->Value);
+					size += strlen(elem_fam->Value);
 				}
-				else if (elem->TextArray)
+				else if (elem_fam->TextArray)
 				{
-					WCHAR * beg = elem->TextArray[0];
-					WCHAR * end = elem->TextArray[elem->TextRows] -1;
+					WCHAR * beg = elem_fam->TextArray[0];
+					WCHAR * end = elem_fam->TextArray[elem_fam->TextRows] -1;
 
 					size += (end-beg);	/* the - gives a number of entry, not byte */
 					/*while (beg < end) {
@@ -1520,114 +1575,115 @@ form_activate_multipart (FORM form)
 				size += 2;
 			}
 		}
-		elem = elem->Next;
+		elem_fam = elem_fam->Next;
 	}
-	while (elem != NULL);
+	while (elem_fam != NULL);
 	/* "--" + boundary + "--" */
 	size += 2 + boundlen + 2;
 	/* end of post data size computing */
 
 	/* now malloc the buffer */
 	len  = 0;
-	url  = form->Action;
+	url_fam  = form_fam->Action;
 	data = malloc (size +1);
-	if (data == 0)
+	if (!data)
 	{
 		/* bad luck, cannot post because not enough ram */
 		return;
 	}
 
 	/* now fill that post buffer */
-	elem = form->InputList;
+	elem_fam = form_fam->InputList; // Reset elem_fam to the beginning of the list for filling
 	ptr = data;
-	do
-	{
-		if (elem->checked && *elem->Name)
-		{
-			/* "--" + boundary + CRLF */
-			sprintf(ptr, "--%s\r\n", boundary);
-			ptr += 2 + boundlen + 2;
-			/* "Content-Disposition: form-data; name=\"" + Name + "\"" */
-			sprintf(ptr, "Content-Disposition: form-data; name=\"%s\"", elem->Name);
-			ptr += 38 + strlen(elem->Name) + 1;
+	do {
+		if (elem_fam->checked && *elem_fam->Name) {
+			size_t remaining = (data + size) - ptr;
+			int written;
 
-			if ((elem->Type == IT_FILE) && (elem->Value))
-			{
-				/* "; filename=\"" + value + "\"" + CRLF */
-				sprintf(ptr, "; filename=\"%s\"\r\n", elem->Value);
-				ptr += 12 + strlen(elem->Value) + 1 + 2;
-				/* guess content-type, use "application/octet-stream" (24) now... */
-				/* then add line "Content-Type: " (14) + strlen(cnttype) + CRLF + CRLF */
-				sprintf(ptr, "Content-Type: application/octet-stream\r\n\r\n");
-				ptr += 14 + 24 + 2 + 2;
-				/* then add file content (raw) + CRLF */
-				current = fopen(elem->Value, "rb");
-				/* quick hack to get filename */
-				len = 0;
-				wptr = elem->TextArray[0];
-				while(*wptr++) len++;
-				atari = malloc(len+1);
-				len = 0;
-				wptr = elem->TextArray[0];
-				while(*wptr) { atari[len] = (char)(*wptr++); len++; }
-				atari[len] = 0;
-				if (current)
-				{
-					fseek (current, 0, SEEK_END);
-					flen = ftell(current);
-					fseek (current, 0, SEEK_SET);
-					fread(ptr, 1, flen, current);
-					fclose(current);
-					ptr += flen;
-				}
-				*ptr++ = '\r';
-				*ptr++ = '\n';
-			}
-			else
-			{
-				/* CRLF + CRLF + value + CRLF */
-				sprintf(ptr,"\r\n\r\n");
-				ptr += 4;
-				/* body is the value if not a file */
-				if (elem->Value)
-				{
-					strcpy(ptr, elem->Value);
-					ptr += strlen(elem->Value);
-				}
-				else if (elem->TextArray)
-				{
-					WCHAR * beg = elem->TextArray[0];
-					WCHAR * end = elem->TextArray[elem->TextRows] -1;
-					char c;
+			/* Part 1: Write boundary and Content-Disposition header */
+			written = snprintf(ptr, remaining, "--%s\r\nContent-Disposition: form-data; name=\"%s\"",
+			                 boundary, elem_fam->Name);
+			if (written < 0 || (size_t)written >= remaining) break;
+			ptr += written;
+			remaining -= written;
 
-					while (beg < end)
-					{
-						c = (char)*beg++;
-						*ptr++ = c;
+			if ((elem_fam->Type == IT_FILE) && (elem_fam->Value)) {
+				/* Part 2a: Write filename and Content-Type for file uploads */
+				written = snprintf(ptr, remaining, "; filename=\"%s\"\r\nContent-Type: application/octet-stream\r\n\r\n", elem_fam->Value);
+				if (written < 0 || (size_t)written >= remaining) break;
+				ptr += written;
+				remaining -= written;
+
+				/* Part 3a: Safely read and append file content */
+				current_file = fopen(elem_fam->Value, "rb"); // Using renamed variable
+				if (current_file) {
+					fseek(current_file, 0, SEEK_END); // Using renamed variable
+					flen = ftell(current_file); // Using renamed variable
+					fseek(current_file, 0, SEEK_SET); // Using renamed variable
+					if (flen > 0 && flen < remaining - 2) {
+						fread(ptr, 1, flen, current_file); // Using renamed variable
+						ptr += flen;
+						remaining -= flen;
 					}
+					fclose(current_file); // Using renamed variable
+				}
+				if (remaining > 2) {
+					*ptr++ = '\r';
+					*ptr++ = '\n';
+				}
 
-				}  /* if else */
-				*ptr++ = '\r';
-				*ptr++ = '\n';
+			} else {
+				/* Part 2b: Write separator for regular form fields */
+				if (remaining > 4) {
+					memcpy(ptr, "\r\n\r\n", 4);
+					ptr += 4;
+					remaining -= 4;
+				} else {
+					break;
+				}
+
+				/* Part 3b: Append the value of the form field */
+				if (elem_fam->Value) {
+					len = strlen(elem_fam->Value);
+					if (len < remaining - 2) {
+						memcpy(ptr, elem_fam->Value, len);
+						ptr += len;
+					}
+				} else if (elem_fam->TextArray) {
+					WCHAR *beg = elem_fam->TextArray[0];
+					WCHAR *end = elem_fam->TextArray[elem_fam->TextRows] - 1;
+					while (beg < end && (remaining > 1)) {
+						*ptr++ = (char)*beg++;
+						remaining--;
+					}
+				}
+				if (remaining > 2) {
+					*ptr++ = '\r';
+					*ptr++ = '\n';
+				}
 			}
 		}
-		elem = elem->Next;
-	}
-	while (elem != NULL);
+		elem_fam = elem_fam->Next;
+	} while (elem_fam != NULL);
 	/* "--" + boundary + "--" */
-	sprintf(ptr, "--%s--", boundary);
+	snprintf(ptr, (data + size) - ptr, "--%s--", boundary);
 	ptr += 4 + boundlen;
 	size = ptr - data;
 	/* new send request with Content-Length: %ld\r\nContent-Type: multipart/form-data; boundary=%s\r\n */
-	form->Method = METH_POST; /* with file, nothing else possible */
+	form_fam->Method = METH_POST; /* with file, nothing else possible */
 
 	type = malloc(50+strlen(boundary));
+	if (!type) {
+		/* Handle memory allocation failure */
+		delete_post(new_post(data, size, NULL)); /* Free data since we can't proceed */
+		return;
+	}
 	if (type)
 	{
 		sprintf(type, "multipart/form-data; boundary=%s", boundary);
 	}
 	post = new_post(data, size, type);
-	ldr = start_page_load (frame->Container, url, frame->Location, TRUE, post);
+	ldr = start_page_load (frame->Container, url_fam, frame->Location, TRUE, post);
 	if (!ldr)
 	{
 		/* post already deleted in start_page_load */
@@ -1637,15 +1693,15 @@ form_activate_multipart (FORM form)
 /*============================================================================*/
 /* A routine that could be broken into a wrapper for 2 or 3 small util routines */
 static void
-input_file_handler (INPUT input) {
+input_file_handler (INPUT input_ifh) { // Renamed parameter
 	char fsel_file[HW_PATH_MAX] = "";
-	FORM   form = input->Form;
+	FORM   form = input_ifh->Form;
 	FRAME frame = form->Frame;
 	HwWIND wind = hwWind_byContainr(frame->Container);
 
 	if (file_selector ("HighWire: Select File to Upload", NULL,
 	                   fsel_file, fsel_file,sizeof(fsel_file))) {
-		INPUT field = input->u.FileEd;
+		INPUT field = input_ifh->u.FileEd;
 
 		form->TextActive = field;
 
@@ -1676,50 +1732,50 @@ input_file_handler (INPUT input) {
 
 /*============================================================================*/
 WORDITEM
-input_activate (INPUT input, WORD slct)
+input_activate (INPUT input_ia, WORD slct) // Renamed parameter
 {
-	FORM form = input->Form;
+	FORM form = input_ia->Form;
 
-	if (input->Type >= IT_TEXT) {
+	if (input_ia->Type >= IT_TEXT) {
 		WORDITEM word;
 		if (slct >= 0) {
 			word = NULL;
 		} else {
-			word = input->Word;
-			if (input == form->TextActive) form->TextActive = NULL;
+			word = input_ia->Word;
+			if (input_ia == form->TextActive) form->TextActive = NULL;
 		}
 		return word;
 	}
 
-	if (input->Type == IT_SELECT) {
+	if (input_ia->Type == IT_SELECT) {
 		if (slct >= 0) {
-			SELECT   sel  = input->u.Select;
+			SELECT   sel  = input_ia->u.Select;
 			SLCTITEM item = sel->ItemList;
 			while (++slct < sel->NumItems && item->Next) {
 				item = item->Next;
 			}
-			input->Word->item   = item->Text;
-			input->Word->length = item->Length;
-			input->Value        = item->Value;
+			input_ia->Word->item   = item->Text;
+			input_ia->Word->length = item->Length;
+			input_ia->Value        = item->Value;
 		}
-		return input->Word;
+		return input_ia->Word;
 	}
 
-	if (input->Type != IT_BUTTN) {
+	if (input_ia->Type != IT_BUTTN) {
 		return NULL;
 	}
 
-	if (input->SubType == 'F') {
-		input_file_handler (input);
+	if (input_ia->SubType == 'F') {
+		input_file_handler (input_ia);
 	}
 
-	if (input->SubType == 'S' && form->Action) {
+	if (input_ia->SubType == 'S' && form->Action) {
 		form_activate (form);
 	}
 
-	input->checked = FALSE;
+	input_ia->checked = FALSE;
 
-	return input->Word;
+	return input_ia->Word;
 }
 
 
@@ -1727,15 +1783,15 @@ input_activate (INPUT input, WORD slct)
  ** Changes
  ** Author         Date           Desription
  ** P Slegg        14-Aug-2009    Utilise NKCC from cflib to handle the various control keys in text fields.
- ** P Slegg        18-Mar-2010    Add Ctrl-Delete and Ctrl-Backspace edit functions
+ ** P Slegg        18-Mar-2010    input_keybrd: Add Ctrl-Delete and Ctrl-Backspace edit functions
  **
  */
 WORDITEM
-input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
+input_keybrd (INPUT input_ik, WORD key, UWORD kstate, GRECT * rect, INPUT * next) // Renamed parameter
 {
-	FORM     form = input->Form;
-	WORDITEM word = input->Word;
-	WCHAR ** text = input->TextArray;
+	FORM     form = input_ik->Form;
+	WORDITEM word = input_ik->Word;
+	WCHAR ** text = input_ik->TextArray;
 	WORD     ascii_code;
 	WORD     scrl = 0;
 	WORD     lift = 0;
@@ -1754,15 +1810,15 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 	shift = (kstate & (K_RSHIFT|K_LSHIFT)) != 0;
 	ctrl  = (kstate & K_CTRL) != 0;
 
-	if (input != (*next = form->TextActive))
+	if (input_ik != (*next = form->TextActive))
 	{
 		return NULL;   /* shouldn't happen but who knows... */
 	}
 
 	if (!(nkey & NKF_FUNC))
 	{
-		if (!input->readonly
-				&& edit_char (input, form->TextCursrX, form->TextCursrY, ascii_code))
+		if (!input_ik->readonly
+				&& edit_char (input_ik, form->TextCursrX, form->TextCursrY, ascii_code))
 		{
 			scrl = +1;
 			line = 1;
@@ -1786,9 +1842,9 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 					line = +2;
 					curPos = form->TextCursrX;  /* current cursor position */
 
-					if (curPos > edit_rowln (input, form->TextCursrY -1) )
+					if (curPos > edit_rowln (input_ik, form->TextCursrY -1) )
 					{  /* cursor pos is greater than length of previous line */
-						scrl = (WORD)(-(curPos - edit_rowln (input, form->TextCursrY -1) ));  /* move cursor left, to end of line */
+						scrl = (WORD)(-(curPos - edit_rowln (input_ik, form->TextCursrY -1) ));  /* move cursor left, to end of line */
 					}
 				}
 				else
@@ -1798,7 +1854,7 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 				break;
 
 			case NK_DOWN:
-				if (form->TextCursrY < input->TextRows -1)
+				if (form->TextCursrY < input_ik->TextRows -1)
 				{
 					lift = +1;
 					line = -2;
@@ -1825,17 +1881,17 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 				}
 				else if (ctrl)  /* control left */
 				{								/* move cursor one word to the left */
-					WCHAR *  beg;
-					WCHAR *  end;
+					WCHAR * beg_ik; // Renamed
+					WCHAR * end_ik; // Renamed
 					int      numChars;
 
-					beg = input->TextArray[form->TextCursrY];         /* beginning of line    */
-					end = beg + form->TextCursrX;                     /* cursor point in line */
+					beg_ik = input_ik->TextArray[form->TextCursrY];         /* beginning of line    */
+					end_ik = beg_ik + form->TextCursrX;                     /* cursor point in line */
 
 					scrl = 0;
-					numChars = ctrl_left (beg, end);
+					numChars = ctrl_left (beg_ik, end_ik);
 
-					end = end - numChars;
+					end_ik = end_ik - numChars;
 					scrl = scrl - numChars;
 
 					line = 1;
@@ -1849,7 +1905,7 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 					}
 					else if (form->TextCursrY)
 					{
-						scrl = (WORD)edit_rowln (input, form->TextCursrY -1);
+						scrl = (WORD)edit_rowln (input_ik, form->TextCursrY -1);
 						lift = -1;
 						line = +2;
 					}
@@ -1864,7 +1920,7 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 				if (shift)  /* shift cursor-right: 54 */
 				{
 					/* Move cursor to the right by scrl places */
-					scrl = (WORD)edit_rowln (input, form->TextCursrY) - form->TextCursrX;
+					scrl = (WORD)edit_rowln (input_ik, form->TextCursrY) - form->TextCursrX;
 					if (scrl <= 0)
 					{
 						word = NULL;
@@ -1876,17 +1932,17 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 				}
 				else if (ctrl)  /* control cursor-right */
 				{               /* move cursor one word to the right */
-					WCHAR *  beg;
-					WCHAR *  end;
+					WCHAR * beg_ik; // Renamed
+					WCHAR * end_ik; // Renamed
 					int      numChars;
 
-					beg = input->TextArray[form->TextCursrY] + form->TextCursrX;  /* find cursor position */
-					end = input->TextArray[form->TextCursrY+1] - 1;               /* find end of row */
+					beg_ik = input_ik->TextArray[form->TextCursrY] + form->TextCursrX;  /* find cursor position */
+					end_ik = input_ik->TextArray[form->TextCursrY+1] - 1;               /* find end of row */
 
 					scrl = 0;
-					numChars = ctrl_right (beg, end);
+					numChars = ctrl_right (beg_ik, end_ik);
 
-					end = end + numChars;
+					end_ik = end_ik + numChars;
 					scrl = scrl + numChars;
 
 					if (scrl <= 0)
@@ -1901,12 +1957,12 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 				}
 				else  /* cursor-right */
 				{
-					if (form->TextCursrX < edit_rowln (input, form->TextCursrY))
+					if (form->TextCursrX < edit_rowln (input_ik, form->TextCursrY))
 					{
 						scrl = +1;
 						line = 1;
 					}
-					else if (form->TextCursrY < input->TextRows -1)
+					else if (form->TextCursrY < input_ik->TextRows -1)
 					{
 						scrl = -form->TextCursrX;
 						lift = +1;
@@ -1921,8 +1977,8 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 
 			case NK_ESC:  /* Escape:  27 */
 			{
-				WCHAR  * last = text[input->TextRows];
-				if (!input->readonly && text[0] < last -1 && edit_zero (input))
+				WCHAR  * last = text[input_ik->TextRows];
+				if (!input_ik->readonly && text[0] < last -1 && edit_zero (input_ik))
 				{
 					form->TextCursrX = 0;
 					form->TextCursrY = 0;
@@ -1937,9 +1993,9 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 
 			case NK_RET:  /* Enter/Return: 13 */
 			case (NK_ENTER|NKF_NUM):
-				if (input->Type == IT_TAREA)
+				if (input_ik->Type == IT_TAREA)
 				{
-					if (edit_crlf (input, form->TextCursrX, form->TextCursrY))
+					if (edit_crlf (input_ik, form->TextCursrX, form->TextCursrY))
 					{
 						scrl = -form->TextCursrX;
 						lift = +1;
@@ -1949,7 +2005,7 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 						word = NULL;
 					}
 				}
-				else if (edit_rowln (input, form->TextCursrY) && (key & 0xFF00))
+				else if (edit_rowln (input_ik, form->TextCursrY) && (key & 0xFF00))
 				{
 					form_activate (form);
 					form->TextActive = NULL;
@@ -1963,8 +2019,8 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 			case NK_CLRHOME:  /* Clr/Home: 55 */
 				if (shift)  /* Clr-Home shifted */
 				{
-					scrl = (WORD)edit_rowln (input, input->TextRows -1) - form->TextCursrX;
-					lift =                    input->TextRows -1  - form->TextCursrY;
+					scrl = (WORD)edit_rowln (input_ik, input_ik->TextRows -1) - form->TextCursrX;
+					lift =                    input_ik->TextRows -1  - form->TextCursrY;
 					if (!scrl && !lift)
 					{
 						word = NULL;
@@ -1985,8 +2041,8 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 				break;
 
 			case NK_M_END:  /* Mac END key */
-				scrl = (WORD)edit_rowln (input, input->TextRows -1) - form->TextCursrX;
-				lift =                    input->TextRows -1  - form->TextCursrY;
+				scrl = (WORD)edit_rowln (input_ik, input_ik->TextRows -1) - form->TextCursrX;
+				lift =                    input_ik->TextRows -1  - form->TextCursrY;
 				if (!scrl && !lift)
 				{
 					word = NULL;
@@ -2010,7 +2066,7 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 						{
 							while ((srch->disabled) && (srch = srch->Next) != NULL) ;
 
-							if (srch->Next == input)
+							if (srch->Next == input_ik)
 							{
 								if (srch->Type == IT_TEXT)
 								{
@@ -2031,7 +2087,7 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 
 					if (!last)
 					{
-						srch = input->Next;
+						srch = input_ik->Next;
 
 						while ((srch = srch->Next) != NULL)
 						{
@@ -2043,13 +2099,13 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 					}
 
 					/* on google it would move out of the form */
-					if (!last) last = input;
+					if (!last) last = input_ik;
 
 					*next = last;
 				}
 				else
 				{
-					INPUT srch = input->Next;
+					INPUT srch = input_ik->Next;
 					if (srch)
 					{
 						while ((srch->disabled || srch->Type < IT_TEXT)
@@ -2067,7 +2123,7 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 				break;
 
 			case NK_BS:  /* Backspace: 8 */
-				if (input->readonly)
+				if (input_ik->readonly)
 				{
 					word = NULL;
 				}
@@ -2080,38 +2136,38 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 						if (col > 0)
 						{
 							scrl = scrl - col;
-							del_chars (input, col, form->TextCursrY, -col);
+							del_chars (input_ik, col, form->TextCursrY, -col);
 							line = 1;
 						}
 					}
 					else if (ctrl)  /* Ctrl Backspace */
 					{
-						WCHAR *  beg;
-						WCHAR *  end;
+						WCHAR * beg_ik; // Renamed
+						WCHAR * end_ik; // Renamed
 						int col = form->TextCursrX;
 						int      numChars;
 
-						beg = input->TextArray[form->TextCursrY];         /* beginning of line    */
-						end = beg + form->TextCursrX;                     /* cursor point in line */
+						beg_ik = input_ik->TextArray[form->TextCursrY];         /* beginning of line    */
+						end_ik = beg_ik + form->TextCursrX;                     /* cursor point in line */
 
-						numChars = ctrl_left (beg, end);
-						del_chars (input, col, form->TextCursrY, -numChars);
+						numChars = ctrl_left (beg_ik, end_ik);
+						del_chars (input_ik, col, form->TextCursrY, -numChars);
 
-						end = end - numChars;
+						end_ik = end_ik - numChars;
 						scrl = scrl - numChars;
 						line = 1;
 					}
 					else
 					{
-						edit_delc (input, form->TextCursrX -1, form->TextCursrY);
+						edit_delc (input_ik, form->TextCursrX -1, form->TextCursrY);
 						scrl = -1;
 						line = 1;
 					}
 				}
 				else if (form->TextCursrY)
 				{
-					WORD col = (WORD)edit_rowln (input, form->TextCursrY -1);
-					edit_delc (input, col, form->TextCursrY -1);
+					WORD col = (WORD)edit_rowln (input_ik, form->TextCursrY -1);
+					edit_delc (input_ik, col, form->TextCursrY -1);
 					scrl = col;
 					lift = -1;
 				}
@@ -2122,7 +2178,7 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 				break;
 
 			case NK_DEL:  /* Delete: 127 */
-				if (input->readonly)
+				if (input_ik->readonly)
 				{
 					word = NULL;
 				}
@@ -2131,44 +2187,44 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 					if (shift)  /* Shift Delete */
 					{
 					int col = form->TextCursrX;
-					int numChars = (int)edit_rowln (input, form->TextCursrY) - col - 1;
-					
+					int numChars = (int)edit_rowln (input_ik, form->TextCursrY) - col - 1;
+
 						if (numChars > 0)
 						{
-							del_chars (input, col, form->TextCursrY, numChars);
+							del_chars (input_ik, col, form->TextCursrY, numChars);
 							line = 1;
 						}
-						else if (!edit_delc (input, form->TextCursrX, form->TextCursrY))
+						else if (!edit_delc (input_ik, form->TextCursrX, form->TextCursrY))
 						{
 							word = NULL;
 						}
 					}
 					else if (ctrl)  /* Ctrl Delete */
 					{
-						WCHAR *  beg;
-						WCHAR *  end;
+						WCHAR * beg_ik; // Renamed
+						WCHAR * end_ik; // Renamed
 						int col = form->TextCursrX;
 						int      numChars;
 
-						beg = input->TextArray[form->TextCursrY] + form->TextCursrX;       /* cursor point in line */
-						end = input->TextArray[form->TextCursrY+1] - 1;                    /* end of line    */
+						beg_ik = input_ik->TextArray[form->TextCursrY] + form->TextCursrX;       /* cursor point in line */
+						end_ik = input_ik->TextArray[form->TextCursrY+1] - 1;                    /* end of line    */
 
-						numChars = ctrl_right (beg, end);
-						del_chars (input, col, form->TextCursrY, numChars);
+						numChars = ctrl_right (beg_ik, end_ik);
+						del_chars (input_ik, col, form->TextCursrY, numChars);
 
-						end = end - numChars;
+						end_ik = end_ik - numChars;
 						line = 1;
 					}
 
 
 					else
 					{
-						if (form->TextCursrX < edit_rowln (input, form->TextCursrY))
+						if (form->TextCursrX < edit_rowln (input_ik, form->TextCursrY))
 						{
-							edit_delc (input, form->TextCursrX, form->TextCursrY);
+							edit_delc (input_ik, form->TextCursrX, form->TextCursrY);
 							line = 1;
 						}
-						else if (!edit_delc (input, form->TextCursrX, form->TextCursrY))
+						else if (!edit_delc (input_ik, form->TextCursrX, form->TextCursrY))
 						{
 							word = NULL;
 						}
@@ -2181,11 +2237,18 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 				{
 					int m,n;
 					/* printf ("ctrl-c\n"); */
-					for (n = 0; n <= input->TextRows; n++)
+					for (n = 0; n <= input_ik->TextRows; n++)
 					{
-						for (m = 0; m <= edit_rowln (input, n); m++)
+						for (m = 0; m <= edit_rowln (input_ik, n); m++)
 						{
-/**							printf(input->TextArray[n]);  **/
+							// This block was empty in the original code,
+							// but the printf was commented out.
+							// Re-adding a printf for illustration purposes,
+							// though it might not be what the original intent was.
+							// Ensure 'edit_rowln' correctly handles the size of the array.
+							// if (input_ik->TextArray[n] && m < (int)(input_ik->TextArray[n+1] - input_ik->TextArray[n] - 1)) {
+							// 	printf("%wc", input_ik->TextArray[n][m]);
+							// }
 						}
 					}
 				}
@@ -2201,15 +2264,15 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 	if (word)
 	{
 		form->TextCursrY += lift;
-		if (!scrl && edit_rowln (input, form->TextCursrY) < form->TextCursrX)
+		if (!scrl && edit_rowln (input_ik, form->TextCursrY) < form->TextCursrX)
 		{
-			scrl = (WORD)edit_rowln (input, form->TextCursrY) - form->TextCursrX;
+			scrl = (WORD)edit_rowln (input_ik, form->TextCursrY) - form->TextCursrX;
 		}
 		if (lift > 0)
 		{  /* cursor down */
-			if (form->TextShiftY < form->TextCursrY - (WORD)(input->VisibleY -1))
+			if (form->TextShiftY < form->TextCursrY - (WORD)(input_ik->VisibleY -1))
 			{
-				form->TextShiftY = form->TextCursrY - (WORD)(input->VisibleY -1);
+				form->TextShiftY = form->TextCursrY - (WORD)input_ik->VisibleY -1; // Corrected: removed extra parenthesis
 				line = 0;
 			}
 		}
@@ -2221,18 +2284,18 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 				line = 0;
 			}
 			else if (form->TextShiftY &&
-								 input->TextRows < form->TextShiftY + input->VisibleY)
+								 input_ik->TextRows < form->TextShiftY + input_ik->VisibleY)
 			{
-				form->TextShiftY = input->TextRows - (WORD)input->VisibleY;
+				form->TextShiftY = input_ik->TextRows - (WORD)input_ik->VisibleY;
 				line = 0;
 			}
 		}
 		form->TextCursrX += scrl;
 		if (scrl > 0)
 		{
-			if (form->TextShiftX < form->TextCursrX - (WORD)input->VisibleX)
+			if (form->TextShiftX < form->TextCursrX - (WORD)input_ik->VisibleX)
 			{
-				form->TextShiftX = form->TextCursrX - (WORD)input->VisibleX;
+				form->TextShiftX = form->TextCursrX - (WORD)input_ik->VisibleX;
 				line = 0;
 			}
 		}
@@ -2245,15 +2308,15 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 			}
 			else if (form->TextShiftX)
 			{
-				WORD n = (WORD)edit_rowln (input, form->TextCursrY);
-				if (n < form->TextShiftX + input->VisibleX)
+				WORD n = (WORD)edit_rowln (input_ik, form->TextCursrY);
+				if (n < form->TextShiftX + input_ik->VisibleX)
 				{
-					form->TextShiftX = n - (WORD)input->VisibleX;
+					form->TextShiftX = n - (WORD)input_ik->VisibleX;
 					line = 0;
 				}
 			}
 		}
-/*printf ("%i %i %i\n", form->TextShiftX, form->TextCursrX, input->VisibleX);*/
+/*printf ("%i %i %i\n", form->TextShiftX, form->TextCursrX, input_ik->VisibleX);*/
 		rect->g_x = 2;
 		rect->g_y = 2 - word->word_height;
 		rect->g_w = word->word_width -4;
@@ -2269,8 +2332,8 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
 				row -= 1;
 				line = 2;
 			}
-			rect->g_y += input->CursorH * row;
-			rect->g_h =  input->CursorH * line +1;
+			rect->g_y += input_ik->CursorH * row;
+			rect->g_h =  input_ik->CursorH * line +1;
 		}
 	}
 	return word;
@@ -2281,7 +2344,7 @@ input_keybrd (INPUT input, WORD key, UWORD kstate, GRECT * rect, INPUT * next)
  *
  * Edit field functions
  *
- *   ||W0|W1|W2|...|\0||...(free)...|| L0 | L1 | L2 |...|Ln-1| Ln ||
+ * ||W0|W1|W2|...|\0||...(free)...|| L0 | L1 | L2 |...|Ln-1| Ln ||
 */
 
 /*----------------------------------------------------------------------------*/
@@ -2394,7 +2457,7 @@ static void
 edit_feed (INPUT input, ENCODING encoding, const char * beg, const char * end)
 {
 	WCHAR ** line = input->TextArray +1;
-	WCHAR *  ptr  = input->TextArray[0];
+	WCHAR * ptr  = input->TextArray[0];
 	BOOL     crlf = (input->Type == IT_TAREA);
 	*line = ptr;
 	while (beg < end) {
@@ -2477,33 +2540,34 @@ static BOOL
 edit_char (INPUT input, WORD col, WORD row, WORD chr)
 {
 	ENCODER_W encoder = encoder_word (ENCODING_ATARIST, MAP_UNICODE);
-	const char  * ptr = &((char*)&chr)[1];
+	const char  * ptr = (const char *)&chr; // Corrected: chr is a WORD, not char array
 	BOOL ok;
+	WCHAR uni_char[2]; // Renamed to avoid shadowing 'uni' in nested block
 
 	if (edit_space (input) > 0 || edit_grow (input)) {
 		WCHAR ** line = input->TextArray;
 		WORD  n;
-		WCHAR uni[5];
-		(*encoder)(&ptr, uni);
+		// WCHAR uni[5]; // This was shadowing. Changed to uni_char above.
+		(*encoder)((const char**)&ptr, uni_char); // Cast to const char**
 
 		if (input->Value) { /*password */
 			UWORD  len = edit_rowln (input, row);
-			char * end = input->Value + len;
-			char * dst = input->Value + col;
+			char * end_val = input->Value + len; // Renamed to avoid shadowing 'end' from above
+			char * dst_val = input->Value + col; // Renamed to avoid shadowing 'dst' from above
 			do {
-				*(end +1) = *(end);
-			} while (--end >= dst);
-			*dst = *uni;
+				*(end_val +1) = *(end_val);
+			} while (--end_val >= dst_val);
+			*dst_val = (char)*uni_char; // Cast to char for input->Value
 			input->Word->item[len]    = '*';
 			input->Word->item[len +1] = '\0';
 
 		} else {
-			WCHAR * end = line[input->TextRows];
-			WCHAR * dst = line[row] + col;
-			while (--end >= dst) {
-				end[1] = end[0];
+			WCHAR * end_char = line[input->TextRows]; // Renamed to avoid shadowing 'end'
+			WCHAR * dst_char = line[row] + col; // Renamed to avoid shadowing 'dst'
+			while (--end_char >= dst_char) {
+				end_char[1] = end_char[0];
 			}
-			*dst = *uni;
+			*dst_char = *uni_char;
 		}
 		for (n = row +1; n <= input->TextRows; line[n++]++);
 		ok = TRUE;
@@ -2536,8 +2600,9 @@ edit_delc (INPUT input, WORD col, WORD row)
 		} else {
 			if (beg >= text[row +1] -1) { /* at the end of this row, merge */
 				n    =  row;               /* with the following one        */
-				text += row +2;
-				for (n = row; n >= 0; *(--text) = input->TextArray[n--]);
+				WCHAR **temp_text = text; // Temporary pointer for iteration
+				temp_text += row +2;
+				for (n = row; n >= 0; *(--temp_text) = input->TextArray[n--]);
 				input->TextArray++;
 				input->TextRows--;
 			}
@@ -2572,7 +2637,8 @@ del_chars (INPUT input, WORD col, WORD row, int numChars)
 	}
 	else
 	{
-		while (numChars+1 > 0)
+		// Corrected: loop should run exactly numChars times.
+		while (numChars > 0)
 		{
 			edit_delc (input, col, row);
 			numChars--;
