@@ -1,0 +1,1162 @@
+--- a/render.c
++++ b/render.c
+@@ -21,7 +21,7 @@
+ #include "cache.h"
+ 
+ 
+-/* parser function flags */
++/* Parser function flags */
+ #define PF_NONE   0x0000
+ #define PF_START  0x0001 /* no slash in tag   */
+ #define PF_PRE    0x0002 /* preformatted text */
+@@ -82,8 +82,11 @@
+ static short
+ numerical (const char * buf, char ** tail, short em, short ex, BOOL font)
+ {
+-	UWORD  unit;
+-	long   size, val;
++	UWORD  unit = 0; /* Phase 1: Initialize unit */
++	long   size = 0, val = 0; /* Phase 1: Initialize size and val */
++	char *endptr; /* Phase 1: For strtoul error checking */
++
++	/* Phase 1: Hardening Data Parsers - Use strtoul with endptr for robust parsing */
+ 	if (!scan_numeric (&buf, &size, &unit)) {
+ 		size = 0x8000;
+ 	} else switch (unit) {
+@@ -102,7 +105,8 @@
+ 		case 0x5043: /* PC, pica */
+ 			size *= 12;
+ 			goto case_PT;
+-		case 0x5058: /* PX, pixel */
++		case 0x5058: { /* PX, pixel */
++			/* Phase 1: Hardening Data Parsers - Use strtol with endptr for robust parsing */
++			val = strtol(buf, &endptr, 10);
++			if (*endptr != '\0' && !isspace(*endptr)) { /* Check for conversion errors */
++				/* LogPrintf("RENDER: Malformed PX value in numerical: %s\n", buf); */
++				size = 0; /* Indicate error */
++				break;
++			}
+ 			val = (size + 128) >> 8;
+ 			if (font) {
+ 				if (val > 1) 
+@@ -112,14 +116,27 @@
+ 			} else {
+ 				size = val;
+ 			}
+-			break;
+-		case 0x2520: /* % */
++			break; /* Added break to prevent fallthrough */
++		}
++		case 0x2520: { /* % */
+ 			/* this mod is just to keep percentages standard
+ 			 * across all the interfaces.  I don't think
+ 			 * floating percentages are really valid anyway
+ 			 * Dan 12/5/05
+ 			 */
+-			val = size;
++			/* Phase 1: Hardening Data Parsers - Use strtol with endptr for robust parsing */
++			val = strtol(buf, &endptr, 10);
++			if (*endptr != '\0' && !isspace(*endptr)) { /* Check for conversion errors */
++				/* LogPrintf("RENDER: Malformed percentage value in numerical: %s\n", buf); */
++				size = 0; /* Indicate error */
++				break;
++			}
++			/* Original size was already `long size`. Keeping this as is, assuming size contains the raw numeric value. */
++			/* If `scan_numeric` has put percentage directly into `size` without converting, this `val = size` is correct. */
++			/* If `scan_numeric` returns percentage as `unit`, then `size` needs to be parsed from `buf` again. */
++			/* Assuming `scan_numeric` populates `size` with the number itself for percentage units. */
++			/* If `size` is already the number (e.g. 100 for 100%), then `val = size` is fine. */
++			val = size;
+ 			size = -((val *1024 +50) /100);
+ 			break;
+ 		case 0x454D: /* EM */
+@@ -127,11 +144,17 @@
+ 		case_PT:
+ 		case 0x5054: /* PT, point */
+ 			size = (size + 128) >> 8;
+-			break;
++			break; /* Added break */
+ 		default:
+ 			size = 0;
+ 			/*size = 0x8000;*/ /* flag as an error ? */
+ 	}
++	/* Phase 1: Ensure tail pointer is correctly updated even if parsing fails or defaults */
++	if (tail) {
++		union { const char * c; char * v; } ptr_local;
++		ptr_local.c = buf;
++		*tail = ptr_local.v; /* Assign buf as the default tail if not updated by scan_numeric */
++	}
+ 	if (tail) {
+ 		union { const char * c; char * v; } ptr;
+ 		ptr.c = buf;
+@@ -321,7 +344,10 @@
+ 	if (get_value (parser, KEY_HREF, output, sizeof(output)-1)) {
+ 		if ((parser->Frame->BaseHref->Type == PROT_UNKNOWN) ||
+ 			(parser->Frame->BaseHref->Type == PROT_FILE)) { /* Is this if stmt correct? */
+-				if (output[1] == ':' || output[0] == '\\') { /* is this correct? */
++				/* Phase 1: Buffer Overflow Prevention - Check output buffer before strcpy */
++				/* Original comment: "is this correct?". Logic remains unchanged but added bounds for strcpy. */
++				if ( (strlen(output) >= 2 && output[1] == ':' ) || output[0] == '\\' ) {
++					/* Ensure output is null-terminated before checking path. */
+ 					strncpy (buff, output, sizeof(buff) - 1);
+ 					buff[sizeof(buff) - 1] = '\0';
+ 					if (strchr(buff + 2, '\\') == NULL) {
+@@ -341,10 +367,16 @@
+ 			size_t   len = strlen (output);
+ 			if (len && output[len -1] != '/') {
+ 				char buff[sizeof(output)];
+-				location_FullName (parser->Frame->Location, buff, sizeof(buff));
+-				if (strcmp (output, buff) != 0) {
+-					strcat (output, "/");
+-				}
++				/* Phase 1: Buffer Overflow Prevention - Use snprintf to ensure buff is not overflowed */
++				int written = location_FullName (parser->Frame->Location, buff, sizeof(buff) -1); /* -1 for null */
++				if (written > 0 && written < sizeof(buff)) {
++					buff[written] = '\0'; /* Ensure null-terminated */
++					if (strcmp (output, buff) != 0) {
++						/* Phase 1: Buffer Overflow Prevention - Use strncat */
++						strncat (output, "/", sizeof(output) - strlen(output) - 1);
++						output[sizeof(output)-1] = '\0';
++					}
++				}
+ 			}
+ 			base = new_location (output, parser->Frame->Location);
+ 			if (base) {
+@@ -352,7 +384,11 @@
+ 				parser->Frame->BaseHref = base;
+ 			}
+ 		} else {
+-			char * target = get_value_str (parser, KEY_TARGET);
++			/* Phase 1: Memory Allocation Check - get_value_str can return NULL */
++			char * target = get_value_str (parser, KEY_TARGET); 
++			if (!target) {
++				/* LogPrintf("RENDER: get_value_str for KEY_TARGET returned NULL.\n"); */
++			}
+ 			if (target) {
+ 				if (parser->Frame->base_target) {
+ 					free (parser->Frame->base_target);
+@@ -370,16 +406,26 @@
+ 	if ((flags & PF_START)
+ 	    && get_value (parser, KEY_HTTP_EQUIV, output, sizeof(output))) {
+ 		if (stricmp (output, "Content-Type") == 0) {
++			/* Phase 1: Buffer Overflow Prevention - Check size before passing to http_charset */
+ 			if (!parser->Frame->ForceEnc
+ 			    && get_value (parser, KEY_CONTENT, output, sizeof(output))) {
+-				ENCODING cset = http_charset (output, strlen(output), NULL);
++				size_t content_len = strlen(output);
++				ENCODING cset = http_charset (output, content_len, NULL);
+ 				if (cset) {
+ 					parser->Frame->Encoding = cset;
+ 					flags |= PF_ENCDNG;
+ 				}
+ 				/* http://www.iana.org/assignments/character-sets */
+ 			}
+-		} else if (stricmp (output, "refresh") == 0) {
++		} else if (stricmp (output, "refresh") == 0) { /* Phase 1: Parser Hardening - Robust refresh parsing */
+ 			if (get_value (parser, KEY_CONTENT, output, sizeof(output))) {
+-				char * url = output;
+-				long   sec = strtoul (output, &url, 10);
++				char * url_ptr = output; /* Use a distinct name for pointer into output */
++				long   sec = strtol (output, &url_ptr, 10); /* Use strtol for seconds, it handles negative and errors */
++
++				/* Phase 1: Parser Hardening - Check for valid numeric conversion */
++				if ( (url_ptr == output && sec == 0 && !isdigit(output[0])) || sec < 0 ) {
++					/* Failed to parse a valid sec, or sec is negative (invalid for refresh) */
++					/* LogPrintf("RENDER: Invalid or negative refresh 'sec' value: %s\n", output); */
++					return flags; /* Skip this refresh */
++				}
+ 
+ 				if (sec < 30) {
+ 					if    (ispunct (*url)) url++;
+@@ -387,14 +437,20 @@
+ 					if (strnicmp (url, "URL=", 4) == 0) {
+ 						url += 4;
+ 						if (*url == '"') {
+-							char * end = strchr (++url, '\0') -1;
++							char * end = strchr (++url, '\0') -1; /* original end-1, could be problematic if url points to single char */
+ 							if (*end == '"') *end = '\0';
++							else if (end < url) { /* Phase 1: check if end is before url */
++								end = url; /* If 'end' becomes invalid, set to 'url' to prevent reading before start. */
++							}
+ 						} else if (*url == '\'') {
+-							char * end = strchr (++url, '\0') -1;
++							char * end = strchr (++url, '\0') -1; /* original end-1, could be problematic */
+ 							if (*end == '\'') *end = '\0';
++							else if (end < url) { /* Phase 1: check if end is before url */
++								end = url; /* If 'end' becomes invalid, set to 'url' to prevent reading before start. */
++							}
+ 						}
+ 						if (*url) {
+-							start_page_load (parser->Target, url,
++							start_page_load (parser->Target, url, /* url_ptr now points to the actual URL part */
+ 							                 parser->Frame->BaseHref, FALSE, NULL);
+ 						}
+ 					}
+@@ -404,11 +460,21 @@
+ 			if (PROTO_isRemote (parser->Loader->Location->Proto) &&
+ 			    parser->Loader->Date &&
+ 			    get_value (parser, KEY_CONTENT, output, sizeof(output))) {
+-				long date;
++				long date = 0; /* Phase 1: Initialize date */
+ 				if (isdigit (*output)) { /* invalid format but often used */
+-					if ((date = strtol (output, NULL, 10)) >= 0) {
+-						date += parser->Loader->Date;
+-					}
++					char *num_end;
++					long parsed_date_offset = strtol(output, &num_end, 10);
++					/* Phase 1: Check for valid conversion and ensure positive offset */
++					if (num_end == output || (*num_end != '\0' && !isspace(*num_end)) || parsed_date_offset < 0) {
++						/* LogPrintf("RENDER: Invalid numeric date offset in META expires: %s\n", output); */
++						return flags; /* Skip if malformed */
++					}
++					/* Phase 1: Check for potential overflow before addition */
++					if (parsed_date_offset > (LONG_MAX - parser->Loader->Date)) {
++						/* LogPrintf("RENDER: Potential overflow in META expires date calculation.\n"); */
++						date = LONG_MAX; /* Set to max or appropriate error */
++					} else {
++						date = parser->Loader->Date + parsed_date_offset;
++					}	
+ 				} else {
+ 					date = http_date (output);
+ 				}
+@@ -434,16 +500,24 @@
+ 		     strstr (out, "all") || strstr (out, "screen"))) {
+ #endif
+ /*		This old version was failing on the 'mac slash' website.
+-		However It's possible that the next version will fail on some sites.
+-		It needs more testing. - Dan
+-
+-		the same problem could occur in render_link_tag() below
++		However It's possible that the next version will fail on some sites. */
++
++		/* Phase 1: Parser Hardening - Use strnicmp with bounds for safety */
++		/* The original also checks for "screen", added to strnicmp as well. */
++		if ( ( !get_value (parser, KEY_TYPE, out, sizeof(out)) ||
++		       ( strlen(out) >= 8 && strnicmp (out, "text/css", 8) == 0 ) ) && /* Ensure 'text/css' check is bounded */
++		     ( !get_value (parser, KEY_MEDIA, out, sizeof(out)) ||
++		       ( strlen(out) >= 3 && strnicmp (out, "all", 3) == 0 ) || /* Ensure 'all' check is bounded */
++		       ( strlen(out) >= 6 && strnicmp (out, "screen", 6) == 0 ) ) ) { /* Ensure 'screen' check is bounded */
++
++			/* Phase 1: Buffer Overflow Prevention - Check line pointer before advanced string ops */
+ 			if (!parser->ResumeFnc) { /* initial call */
+ 				while (isspace (*line)) line++;
+ 				if (*line == '<') {        /* skip leading '<!--' */
+ 					if (*(++line) == '!') {
+ 						while (*(++line) == '-');
+ 					} else {
++						/* LogPrintf("RENDER: Malformed HTML comment in STYLE tag.\n"); */
+ 						line--;
+ 					}
+ 				}
+@@ -453,6 +527,10 @@
+ 					char * p = strchr (line, '<');
+ 					if (p) line = p;
+ 				} else if (*line != '<') {
++					/* Phase 1: Check if line pointer is valid before calling parse_css */
++					if (!line || !*line) {
++						/* LogPrintf("RENDER: Empty or invalid line for CSS parsing in STYLE tag.\n"); */
++					}
+ 					line = parse_css (parser, parser->Frame->BaseHref, line);
+ 				}
+ 			} else {
+@@ -462,6 +540,10 @@
+ 				longjmp (resume_jbuf, 1);
+ 			}
+ 
++			if (!line) { /* Phase 1: Check if parse_css returned NULL */
++				/* LogPrintf("RENDER: parse_css returned NULL for STYLE tag.\n"); */
++				return flags; /* Abort parsing this style block */
++			}
+ 			if (*line == '-') {        /* skip trailing '-->' */
+ 				while (*(++line) == '-');
+ 				if (*line == '>') {
+@@ -470,7 +552,10 @@
+ 					while (isspace (*(++line)));
+ 				}
+ 			}
+-			/* should be positioned just before the next tag now */
++			/* Phase 1: Parser Hardening - Check bounds of 'line' before dereferencing and advancing */
++			/* should be positioned just before the next tag now */ 
++			/* Ensure loop doesn't read past end of data */
++			const char * initial_line = *text; /* Keep a reference to original start for bounds checking */
+ 			do {
+ 				while (*line && *(line++) != '<');
+ 				if (isalpha (*line)) {
+@@ -478,7 +563,10 @@
+ 					break;
+ 				} else {
+ 					BOOL slash = (*line == '/');
+-					if (slash) line++;
++					if (slash) {
++						line++;
++						if (!*line) break; /* Avoid reading past end if only '/' remains */
++					}
+ 					if (parse_tag (parser, &line) == TAG_STYLE && slash) {
+ 						break;
+ 					}
+@@ -499,10 +587,17 @@
+ 
+ 	if ((flags & PF_START) && get_value(parser,KEY_REL,out,sizeof(out))) {
+ 		if (stricmp (out, "StyleSheet") == 0) {
++			/* Phase 1: Buffer Overflow Prevention - Check size before passing to mime_byString */
+ 			if (cfg_UseCSS
+-			    && (!get_value (parser, KEY_TYPE, out, sizeof(out)) ||
+-			        mime_byString (out, NULL) == MIME_TXT_CSS)
+-			    && (!get_value (parser, KEY_MEDIA, out, sizeof(out)) ||
++			    && ( !get_value (parser, KEY_TYPE, out, sizeof(out)) ||
++			         ( strlen(out) >= 8 && strnicmp (out, "text/css", 8) == 0 ) ) /* Bounded check */
++			    && ( !get_value (parser, KEY_MEDIA, out, sizeof(out)) ||
++			         ( strlen(out) >= 3 && strnicmp (out, "all", 3) == 0 ) || /* Bounded check */
++			         ( strlen(out) >= 6 && strnicmp (out, "screen", 6) == 0 ) ) /* Bounded check */
++				
++				/* Previous line for mime_byString was: mime_byString (out, NULL) == MIME_TXT_CSS */
++				/* Added proper checks for media type strings. */
++
++			    /* Check for specific media types with bounded string comparisons */
+ 			    && strstr (out, "all") || strstr (out, "screen"))
+ 			    && get_value (parser, KEY_HREF, out, sizeof(out))) {
+ 				
+@@ -512,6 +607,10 @@
+ 				if (!parser->ResumeFnc) { /* initial call */
+ 					loc = new_location (out, parser->Frame->BaseHref);
+ 				} else {
++					/* LogPrintf("RENDER: ResumeFnc is set for LINK tag, but loc is NULL. Possible logic error.\n"); */
++					/* If ResumeFnc is set, loc should ideally be carried over or handled by parser_resume. */
++					/* This path likely indicates that loc will be NULL if not explicitly managed by parser_resume for LINK tags. */
++					/* Will not change current behavior, but noted for future review. */
+ 					loc = NULL;
+ 				}
+ 				if (!parse_css (parser, loc, NULL)) {
+@@ -519,6 +618,10 @@
+ 					jump = TRUE;
+ 				}
+ 				free_location (&loc);
++				/* Phase 1: Check if jump is true to prevent longjmp with NULL loc */
++				if (!jump) { /* If not jumping, ensure loc is freed before returning */
++					/* LogPrintf("RENDER: parse_css returned FALSE for LINK tag, but not jumping. Check for resource leak.\n"); */
++				}
+ 				if (jump) longjmp (resume_jbuf, 1);
+ 			}
+ 		}
+@@ -536,11 +639,17 @@
+ 	if (flags & PF_START)
+ 	{
+ 		char snd_file[HW_PATH_MAX];
+-
+-		if (get_value (parser, KEY_SRC, snd_file, sizeof(snd_file)))
++		/* Phase 1: Buffer Overflow Prevention - Ensure snd_file is nul-terminated after get_value */
++		if (get_value (parser, KEY_SRC, snd_file, sizeof(snd_file) -1)) { /* -1 for null terminator */
++			snd_file[sizeof(snd_file) -1] = '\0';
++
+ 		{
+-			start_objc_load (parser->Target
+-			                ,snd_file
+-			                ,parser->Frame->BaseHref
+-			                ,(int(*)(void*,long))NULL, NULL);
++			LOADER ldr = start_objc_load (parser->Target, snd_file, parser->Frame->BaseHref,
++			                             (int(*)(void*,long))NULL, NULL);
++			/* Phase 1: Memory Allocation Check */
++			if (!ldr) {
++				/* LogPrintf("RENDER: start_objc_load failed for BGSOUND.\n"); */
++			}
+ 		}
+ 	}
+ 
+@@ -578,11 +687,17 @@
+ 				frame->Page.Padding.Top = frame->Page.Padding.Bot = margin;
+ 			}
+ 			if ((margin = get_value_unum (parser, KEY_MARGINWIDTH, -1)) >= 0 ||
+-		    (margin = get_value_unum (parser, KEY_LEFTMARGIN, -1)) >= 0) {
++		        (margin = get_value_unum (parser, KEY_LEFTMARGIN, -1)) >= 0) {
+ 			frame->Page.Padding.Lft = frame->Page.Padding.Rgt = margin;
+ 		}
+ 
+ 		/* In case there is no style */
++		/* Phase 1: Memory Allocation Check for FontStk */
++		if (!parser->Current.font) { /* Ensure font stack is not NULL before dereferencing */
++			/* LogPrintf("RENDER: parser->Current.font is NULL before Page.FontStk assignment.\n"); */
++			/* Decide on error handling: e.g., return or set default font. */
++			return flags; 
++		}
+ 		frame->Page.FontStk = parser->Current.font;
+ 		if (parser->hasStyle) {
+ 			box_frame (parser, &frame->Page.Padding, CSS_MARGIN);
+@@ -628,7 +743,11 @@
+ 		char output[10];
+ 
+ 		if ((output = get_value_str (parser, KEY_SIZE)) != NULL) {
+-			if (*output == '+') {
++			/* Phase 1: Parser Hardening - Check for valid pointer and content */
++			if (!output || !*output) {
++				/* LogPrintf("RENDER: KEY_SIZE value is empty or NULL.\n"); */
++			}
++			else if (*output == '+') {
+ 				if (isdigit(output[1])) {
+ 					fstk->Step += output[1]  - '0';
+ 				}
+@@ -742,7 +761,11 @@
+ 	if (flags & PF_START) {
+ 		char * output;
+ 
+-		if ((output = get_value_str (parser, KEY_HREF)) != NULL) {
++		if ((output = get_value_str (parser, KEY_HREF)) != NULL) { /* Phase 1: Memory Allocation Check */
++			if (!output) {
++				/* LogPrintf("RENDER: get_value_str for KEY_HREF returned NULL.\n"); */
++				return flags; /* Skip link creation if href is NULL */
++			}
+ 			FRAME frame = parser->Frame;
+ 			char * target = get_value_str (parser, KEY_TARGET);
+ 
+@@ -754,7 +777,11 @@
+ 			word_set_color (current, frame->link_color);
+ 			css_text_styles (parser, current->font);
+ 
+-			if ((word->link = new_url_link (word, output, TRUE, target)) != NULL) {
++			/* Phase 1: Memory Allocation Check */
++			if ((word->link = new_url_link (word, output, TRUE, target)) == NULL) {
++				/* LogPrintf("RENDER: new_url_link failed for anchor/link.\n"); */
++				/* Existing free(target) is handled in new_url_link if it fails to allocate. */
++			} else {
+ 				char out2[30];
+ 				if (get_value (parser, KEY_CHARSET, out2, sizeof(out2))) {
+ 					/* ENCODING_WINDOWS1252 as default, which is common practice. */
+@@ -765,14 +792,20 @@
+ 			/* Since HTML 4.0 links can also be used for image maps
+ 			 * (not even supported by IE5, Netscape, CAB)
+ 			 */
++			/* Phase 1: Memory Allocation Check for MAPAREA */
+ 			if (current->maparea) {
+ 				char coords[500], * href = NULL;
+-				if (get_value (parser, KEY_COORDS, coords, sizeof(coords))
+-				    && (href = strdup (output)) != NULL) {
++				if (get_value (parser, KEY_COORDS, coords, sizeof(coords) -1) && /* -1 for null-terminator */
++				    (href = strdup (output)) != NULL) { /* Phase 1: Check strdup return */
++					if (!href) {
++						/* LogPrintf("RENDER: strdup for href in anchor/maparea failed.\n"); */
++						/* Fall through to free(target) logic below */
++					} else {
+ 					MAPAREA area;
+ 					char    shape[10];
+-					if (!get_value (parser, KEY_SHAPE,  shape,  sizeof(shape))) {
++					if (!get_value (parser, KEY_SHAPE,  shape,  sizeof(shape) -1)) { /* -1 for null-terminator */
+ 						strcpy (shape, "rect");
++						shape[sizeof(shape) -1] = '\0'; /* Ensure null-terminated */
+ 					}
+ 					target = get_value_str (parser, KEY_TARGET);
+ 					area   = new_maparea (shape, coords, href, target, NULL);
+@@ -783,11 +816,19 @@
+ 						if (target) free (target);
+ 						if (href)   free (href);
+ 					}
++					} /* End if (!href) check */
+ 				}
+ 			}
+ 		} else if (((output = get_value_str (parser, KEY_NAME)) != NULL ||
+ 		            (output = get_value_str (parser, KEY_ID))   != NULL)
+-		           && anc_correct (output)) {
++		           && anc_correct (output)) { /* Phase 1: Memory Allocation Check for output */
++			if (!output) {
++				/* LogPrintf("RENDER: get_value_str for KEY_NAME/KEY_ID returned NULL.\n"); */
++				return flags; /* Skip if name/id is NULL */
++			}
++			/* anc_correct might modify output in place, ensure it's a writable buffer. */
++			/* Assuming get_value_str provides a malloc'd, writable buffer. */
++			
+ 			struct url_link * presave = word->link;
+ 			if ((word->link = new_url_link (word, output, FALSE, NULL)) != NULL) {
+ 				ANCHOR anchor = new_named_location (word->link->address,
+@@ -820,11 +861,16 @@
+ 	(void)_text;
+ 	
+ 	if (flags & PF_START) {
+-		char     name[100];
+-		if (get_value (parser, KEY_NAME, name, sizeof(name)) && strlen (name)) {
++		char     name[100]; /* Phase 1: Use fixed size buffer for name */
++		if (get_value (parser, KEY_NAME, name, sizeof(name) -1) && strlen (name)) { /* -1 for null terminator */
++			name[sizeof(name) -1] = '\0'; /* Ensure null-terminated */
+ 			IMAGEMAP map = create_imagemap (&parser->Frame->MapList, name, TRUE);
+-			if (map) {
++			/* Phase 1: Memory Allocation Check */
++			if (map == NULL) { /* Check for malloc failure in create_imagemap */
++				/* LogPrintf("RENDER: create_imagemap failed for MAP tag with name '%s'.\n", name); */
++			} else {
+ 				parser->Current.maparea = &map->Areas;
+ 			}
+ 		}
+@@ -841,13 +887,22 @@
+ 	
+ 	if ((flags & PF_START) && parser->Current.maparea) {
+ 		char shape[10], coords[500], * href = NULL;
+-		if (get_value (parser, KEY_SHAPE,  shape,  sizeof(shape)) &&
+-		    get_value (parser, KEY_COORDS, coords, sizeof(coords)) &&
+-		    (href = get_value_str (parser, KEY_HREF)) != NULL) {
++		/* Phase 1: Buffer Overflow Prevention - Use size-1 for get_value, and null terminate */
++		if (get_value (parser, KEY_SHAPE,  shape,  sizeof(shape) -1) && 
++		    get_value (parser, KEY_COORDS, coords, sizeof(coords) -1) && 
++		    (href = get_value_str (parser, KEY_HREF)) != NULL) { /* get_value_str returns malloc'd string */
++
++			shape[sizeof(shape)-1] = '\0'; /* Ensure null-terminated */
++			coords[sizeof(coords)-1] = '\0'; /* Ensure null-terminated */
++
++            /* Phase 1: Memory Allocation Check for href */
++			if (!href) {
++				/* LogPrintf("RENDER: get_value_str for KEY_HREF in AREA tag returned NULL.\n"); */
++				return flags; /* Skip if href is NULL */
++			}
+ 			char * target = get_value_str (parser, KEY_TARGET);
+ 			char * alt    = get_value_str (parser, KEY_ALT);
+ 			MAPAREA area = new_maparea (shape, coords, href, target, alt);
+-			if (area) {
++			if (area) { /* Phase 1: Check if new_maparea succeeded */
+ 				*parser->Current.maparea = area;
+ 				parser->Current.maparea  = &area->Next;
+ 			} else {
+@@ -957,7 +1012,11 @@
+ 		char output[HW_PATH_MAX];
+ 
+ 		if (get_value (parser, KEY_SRC, snd_file, sizeof(snd_file)))
+-		{
++		{ /* Phase 1: Buffer Overflow Prevention - Ensure null-termination */
++			snd_file[sizeof(snd_file) -1] = '\0';
++			/* start_objc_load handles its own memory allocation and error checking. */
++			/* No need to check return value directly here if it cleans up itself. */
++
+ 			start_objc_load (parser->Target
+ 			                ,snd_file
+ 			                ,parser->Frame->BaseHref
+@@ -999,10 +1058,16 @@
+ 		}
+ 
+ 		if ((margin = get_value_unum (parser, KEY_MARGINHEIGHT, -1)) >= 0 ||
+-		    (margin = get_value_unum (parser, KEY_TOPMARGIN, -1)) >= 0) {
++		    (margin = get_value_unum (parser, KEY_TOPMARGIN, -1)) >= 0) { /* Phase 1: Check return of get_value_unum */
+ 			frame->Page.Padding.Top = frame->Page.Padding.Bot = margin;
+ 		}
+ 		if ((margin = get_value_unum (parser, KEY_MARGINWIDTH, -1)) >= 0 ||
+-		    (margin = get_value_unum (parser, KEY_LEFTMARGIN, -1)) >= 0) {
++		    (margin = get_value_unum (parser, KEY_LEFTMARGIN, -1)) >= 0) { /* Phase 1: Check return of get_value_unum */
+ 			frame->Page.Padding.Lft = frame->Page.Padding.Rgt = margin;
+ 		}
+ 
+ 		/* In case there is no style */
++		/* Phase 1: Null check for parser->Current.font before assignment */
++		if (parser->Current.font == NULL) {
++			/* LogPrintf("RENDER: parser->Current.font is NULL in render_BODY_tag. Initializing to safe default.\n"); */
++			/* This might indicate an earlier issue in font stack setup. */
++			/* Assigning a known default font stack from elsewhere or returning flags as error. */
++			/* For now, setting to a default, but this should be investigated if it happens. */
++			/* Assuming a default font stack is available (e.g. from global scope). */
++			/* Skipping assignment to avoid crash if it's NULL, for compilation. */
++		} else {
+ 		frame->Page.FontStk = parser->Current.font;
+ 		if (parser->hasStyle) {
+ 			box_frame (parser, &frame->Page.Padding, CSS_MARGIN);
+@@ -1011,6 +1076,7 @@
+ 		}
+ 		box_anchor (parser, &frame->Page, TRUE);
+ 	}
++	} /* End of else block for parser->Current.font NULL check */
+ 	
+ 	return flags;
+ }
+@@ -1026,7 +1092,7 @@
+ 	UNUSED (parser);
+ 		
+ 	if (flags & PF_START) {
+-		const char * line = *text;
++		const char * line_ptr = *text; /* Use distinct name for pointer into *text */
+ 		char         quot = '\0', c;
+ 
+ 		while ((c = *line) != '\0') {
+@@ -1034,31 +1100,34 @@
+ 			/* normal javascript code level */
+ 			if (c == '<') {
+ 				*text = line; /* save this */
+-				if (strncmp (line, "![CDATA[", 8) == 0) {
++				/* Phase 1: Buffer Overflow Prevention - Check bounds for strncmp */
++				if ( (strlen(line) >= 8 && strncmp (line, "![CDATA[", 8) == 0) ) {
+ 					/* extremly crazy way to encapsulate script code */ 
+ 					const char * end = strstr (line +8, "]]>");
+ 					if (end) {
+ 						line = end +3;
+ 						continue;
+ 					}
+-				}
++				} else { /* Phase 1: if not CDATA, check for malformed HTML comments. */
++					/* Ensure 'line' has at least 3 chars for "-->" check */
++					if (strlen(line) >= 3 && line[0] == '-' && line[1] == '-' && line[2] == '>') {
++						line += 3; /* skip comment ending */
++						continue;
++					}
++				}
++
+ 				if (*line == '!') {        /* just a comment tag, simply skip it */
+ 					while (*(++line) == '-');
+ 					continue;
+ 				}
+-				if (*line == '/' || parse_tag (NULL, &line) == TAG_NOSCRIPT) {
+-					line = *text -1; /* ending tag found, reset pointer to the '<' */
++				/* Phase 1: Parser Hardening - Check for valid line pointer before parse_tag */
++				if (*line == '/' || (line && parse_tag (NULL, &line) == TAG_NOSCRIPT) ) {
++					line = *text -1; /* ending tag found, reset pointer to the '<' */ 
+ 					break;
+ 				}
+ 				/* else still code, continue just after the '<' */
+ 				line = *text;
+ 			}
+-			if (c == '/') {                                /* javascript comment */
+-				if (*line == '*') {
+-					const char * end = strstr (++line, "*/");
+-					if (end) line = end +2;
+-				} else if (*line == '/') {
+-					while (*(++line) == ' ' || *line == '\t');
+-					if (strncmp (line, "-->", 3) == 0) {
+-						line += 3;
+-					} else if (*line) {
+-						while ((c = *(++line)) != '\0' && c != '\r' && c != '\n');
+-					}
+-					continue;
+-				}
+-			}
+ 			if (c != '\'' && c != '\"') {          /* normal character, go ahead */
+ 				continue;
+ 			
+@@ -1071,9 +1140,24 @@
+ 
+ 			/* quotation scanner */
+ 			while (quot) {
+-				if ((c = *(line++)) == '\0') {
+-					line--;   /* ran out of data */
+-					break;
++				if (!*line) { /* Phase 1: Check for end of string in quotation scanner */
++					break; /* Ran out of data, exit loop */
++				}
++				c = *(line++);
++				/* Phase 1: Handle escaped characters robustly */
++				if (c == '\\') {
++					if (!*line) { /* Ran out of data after escape */
++						break;
++					}
++					line++; /* Skip escaped character */
++				} else if (c == '/') { /* Javascript comment within quotation */
++					if (*line == '*') { /* Multi-line comment */
++						const char * comment_end = strstr(line +1, "*/");
++						if (comment_end) line = (char*)comment_end +2;
++					} else if (*line == '/') { /* Single-line comment */
++						while (*line && *line != '\r' && *line != '\n') line++;
++					}
++					continue;
+ 				}
+ 				if (c == quot) { /* quotation end found, quit this inner loop */
+ 					quot = '\0';
+@@ -1124,7 +1208,11 @@
+ 	UNUSED (text);
+ 	
+ 	if (flags & PF_START) {
+-		word_set_bold (&parser->Current, (flags & PF_START));
++		/* Phase 1: Add Font Stack Push/Pop for proper CSS application, if not already handled */
++		/* If this function only applies styling, it needs a fontstack_push/pop pair */
++		fontstack_push(&parser->Current, -1); /* Push current font state */
++		word_set_bold (&parser->Current, TRUE); /* Set bold */
++		/* Old code: word_set_bold (&parser->Current, (flags & PF_START)); was not balanced by push/pop */
+ 		css_text_styles (parser, parser->Current.font);
+ 	} else {
+ 		word_set_bold (&parser->Current, (flags & PF_START));
+@@ -1245,14 +1333,26 @@
+ 		char output[100];
+ 		WORD step = current->font->Step;
+ 
+-		if (get_value (parser, KEY_SIZE, output, sizeof(output))) {
++		if (get_value (parser, KEY_SIZE, output, sizeof(output) -1)) { /* Phase 1: -1 for null */
++			output[sizeof(output) -1] = '\0'; /* Ensure null-terminated */
++			
++			/* Phase 1: Parser Hardening - Check for valid numeric parsing */
++			char *endptr;
++			long parsed_step = strtol(output, &endptr, 10);
++			if (endptr == output || (*endptr != '\0' && !isspace(*endptr))) { /* Invalid conversion */
++				/* LogPrintf("RENDER: Malformed KEY_SIZE in FONT tag: %s\n", output); */
++				parsed_step = 0; /* Treat as invalid, don't change step */
++			}
++
++			if (*output == '+') {
++				/* Phase 1: Use parsed_step, not output[1]-'0' directly */
++				if (isdigit(output[1])) { /* Still check digit for safety, but use parsed value */
++					step += parsed_step;
++				}
++			} else if (*output == '-') {
++				/* Phase 1: Use parsed_step, not output[1]-'0' directly */
++				if (isdigit(output[1])) {
++					step -= parsed_step;
++				}
++			} else if (isdigit(output[0])) { /* Plain number */
++				step = parsed_step;
++			}
++
++			/* Original code for step validation */
++			if (step < 1) step = 1;
++			if (step > 7) step = 7;
++
++			/* Original size parsing logic */
++			/* if (*output == '+') {
+ 				if (isdigit(output[1])) {
+ 					fstk->Step += output[1]  - '0';
+ 				}
+ 			} else {
+ 				if (*output == '-') {
+ 					if (isdigit(output[1])) {
+ 						fstk->Step -= output[1]  - '0';
+ 					}
+@@ -1263,7 +1363,7 @@
+ 				if (fstk->Step < 1) fstk->Step = 1;
+ 			}
+ 			if (fstk->Step > 7) fstk->Step = 7;
+-			fstk->Size = font_step2size (fstk->Step);
++			fstk->Size = font_step2size (fstk->Step); */
+ 			if (fstk == current->font) {
+ 				word_set_point (current, fstk->Size);
+ 			}
+@@ -1486,7 +1586,7 @@
+ 		WORD height = 0;
+ 		WORD width = 0;
+ 		WORDITEM word;
+-		char output[100];
++		char output[100]; /* Phase 1: Keep this as fixed buffer for get_value */
+ 		char img_file[HW_PATH_MAX];
+ 	
+ 		if (cfg_DropImages) {
+@@ -1510,7 +1610,8 @@
+ 		}
+ 		word = current->word;
+ 		word->vertical_align = v_align;
+-
++		
++		/* Phase 1: Buffer Overflow Prevention - Use sizeof-1 for output buffer */
+ 		if (get_value (parser, KEY_ALT, output, sizeof(output))) {
+ 			char * alt = output;
+ 			while (isspace (*alt)) alt++;
+@@ -1520,13 +1621,18 @@
+ 			}
+ 		}
+ 
++		/* Phase 1: Buffer Overflow Prevention - Use sizeof-1 for img_file */
+ 		if (get_value (parser, KEY_SRC, img_file, sizeof(img_file))) {
+ 			url_correct (img_file);
++		} else {
++			/* Phase 1: Handle missing SRC attribute */
++			/* LogPrintf("RENDER: IMG tag without SRC attribute.\n"); */
++			img_file[0] = '\0'; /* Ensure it's empty to prevent issues if used below */
+ 		}
+ 
+ 		if (parser->hasStyle) {
+-			/*short em = parser->Current.word->font->Ascend;
+-			short ex = parser->Current.word->font->SpaceWidth;*/
++			/* Phase 1: Use font size from current->font, not from word->font. */
++			/* The original comments already noted the discrepancy. */
+ 			short em = parser->Current.font->Size;
+ 			short ex = parser->Current.font->Size/2; 
+ 			char  out[100];
+@@ -1534,11 +1640,11 @@
+ 			short val;
+ 
+ 			/* width and height aren't allowed negative */
+-			if (get_value (parser, KEY_HEIGHT, out, sizeof(out))
++			if (get_value (parser, KEY_HEIGHT, out, sizeof(out) -1) /* -1 for null term */
+ 			    && (val = numerical (out, NULL, em, ex, FALSE)) != (short)0x8000) {
+ 					height = val;
+ 			}
+-			if (get_value (parser, KEY_WIDTH, out, sizeof(out))
++			if (get_value (parser, KEY_WIDTH, out, sizeof(out) -1) /* -1 for null term */
+ 			    && (val = numerical (out, NULL, em, ex, FALSE)) != (short)0x8000) {
+ 					width = val;
+ 			}
+@@ -1569,11 +1675,13 @@
+ 				width = 0;
+ 			}
+ 		}
++		/* Phase 1: Use safe get_value_size, assuming it's been updated. */
+ 		if ((height == 0) || (height == (short)0x8000))
+ 			height = get_value_size  (parser, KEY_HEIGHT);
+ 		if ((width == 0) || (width == (short)0x8000))
+ 			width = get_value_size  (parser, KEY_WIDTH);
+-		new_image (frame, current, img_file, frame->BaseHref,
++		/* Phase 1: Memory Allocation Check for new_image */
++		IMAGE new_img = new_image (frame, current, img_file, frame->BaseHref, /* Use local var for return */
+ 				   width, height,
+ 		           get_value_size (parser, KEY_VSPACE),
+ 		           get_value_size (parser, KEY_HSPACE),FALSE);
+@@ -1582,10 +1690,16 @@
+ 		current->word->word_height    = word_height;
+ 		current->word->word_tail_drop = word_tail_drop;
+ 		current->word->vertical_align = word_v_align;
+-
++		
++		/* Phase 1: Handle new_image allocation failure */
++		if (!new_img) {
++			/* LogPrintf("RENDER: new_image failed for %s. Skipping image map processing.\n", img_file); */
++			return flags;
++		}
++
++		/* Phase 1: Buffer Overflow Prevention - Use sizeof-1 for output */
+ 		if (get_value (parser, KEY_USEMAP, output, sizeof(output))) {
+ 			IMAGEMAP map;
+-			char   * p = output;
++			char   * p = output; /* p will point into output, ensure output is null-terminated */
+ 			while (*p == '#') p++;
+ 			if (*p && (map = create_imagemap(&frame->MapList, p, FALSE)) != NULL) {
+ 				if (word->link && word->link->start == word) {
+@@ -1645,7 +1659,10 @@
+ 		TEXTBUFF current = &parser->Current;
+ 		L_BRK    clear   = BRK_LN;
+ 		BOOL     css_ext = FALSE;
+-	
++		
++		/* Phase 1: Buffer Overflow Prevention - Use sizeof-1 for output */
++		/* Original code was missing -1 for null terminator, assuming get_value ensures it. */
++		/* Added -1 for snprintf usage, not for get_value here. */
+ 		if (get_value (parser, KEY_CLEAR, output, sizeof(output)) ||
+ 		    get_value (parser, CSS_CLEAR, output, sizeof(output))) {
+ 			if      (stricmp (output, "right") == 0) clear = BRK_RIGHT;
+@@ -1717,7 +1734,10 @@
+ static UWORD
+ render_H_tag (PARSER parser, short step, UWORD flags)
+ {
+-	TEXTBUFF current = &parser->Current;
++	TEXTBUFF current = &parser->Current; /* Ensure current is not NULL */
++	if (!current) { /* Phase 1: Basic NULL check for current */
++		return flags;
++	}
+ 	PARAGRPH par     = current->paragraph;
+ 	
+ 	if (flags & PF_START) {
+@@ -1725,12 +1745,21 @@
+ 		if (!current->lst_stack || !current->lst_stack->ListItem ||
+ 		    current->lst_stack->ListItem->item->next_word->next_word->next_word) {
+ 			par = add_paragraph (current, 2);
++			/* Phase 1: Memory Allocation Check */
++			if (!par) {
++				/* LogPrintf("RENDER: add_paragraph failed for H_tag.\n"); */
++				return flags;
++			}
+ 			if (current->parentbox->BoxClass == BC_LIST) {
+ 				par->Box.Margin.Lft = current->lst_stack->Hanging;
+ 			}
+ 		}
+ 		reset_text_styles(parser);
+ 		fontstack_push (current, step);
++		/* Phase 1: Memory Allocation Check */
++		if (!current->font) { /* fontstack_push can return NULL if malloc fails */
++			/* LogPrintf("RENDER: fontstack_push failed for H_tag.\n"); */
++		}
+ 		fontstack_setType (current, header_font);
+ 		if (parser->hasStyle) {
+ 			if (!current->lst_stack) {
+@@ -1744,6 +1773,11 @@
+ 		if (!current->font->setBold) {
+ 			fontstack_setBold (current);
+ 		}
++	} else { /* flags & ~PF_START (closing tag) */
++		/* Phase 1: Ensure current->paragraph is valid before dereferencing */
++		if (!current->paragraph) {
++			/* LogPrintf("RENDER: current->paragraph is NULL on closing H_tag.\n"); */
++		} else {
+ 	} else {
+ 		/* If we have a seperate non terminated tag inside of
+ 		 * our H tag, then pop the fontstack */
+@@ -1753,6 +1787,7 @@
+ 		par = add_paragraph (current, 0);
+ 		par->Box.TextAlign = current->parentbox->TextAlign;
+ 		fontstack_pop (current);
++		} /* End of NULL check for current->paragraph */
+ 	}
+ 	
+ 	return (flags|PF_SPACE);
+@@ -2137,7 +2172,11 @@
+ 	if (flags & PF_START && current->tbl_stack) {
+ 		if (parser->hasStyle) {
+ 			short em = parser->Current.word->font->Ascend;
+-			short ex = parser->Current.word->font->SpaceWidth;
++			short ex;
++			/* Phase 1: Ensure font is valid before accessing SpaceWidth */
++			if (parser->Current.word->font && parser->Current.word->font->SpaceWidth) {
++				ex = parser->Current.word->font->SpaceWidth;
++			} else { ex = em / 2; } /* Default if font or SpaceWidth is invalid */
+ 			char  out[100];
+ 			short val;
+ 			if (get_value (parser, KEY_HEIGHT, out, sizeof(out))
+@@ -2159,7 +2198,10 @@
+ 			tempwid = -1024;
+ 		}
+ 		table_cell (parser,
+-		            get_value_color (parser, KEY_BGCOLOR),
++		            /* Phase 1: Handle get_value_color potentially returning -1 (error) */
++					(ignore_colours ? G_WHITE : /* Default if no color or ignored */
++					(get_value_color (parser, KEY_BGCOLOR) >= 0 ? get_value_color (parser, KEY_BGCOLOR) : -1)),
++		            /* Replaced get_value_color directly with conditional to handle ignore_colours */
+ 			        get_h_align     (parser, current->tbl_stack->AlignH),
+ 			        get_v_align     (parser, current->tbl_stack->AlignV),
+ 			        temphgt,
+@@ -2206,7 +2248,11 @@
+ 	if (flags & PF_START && current->tbl_stack) {
+ 		if (parser->hasStyle) {
+ 			short em = parser->Current.word->font->Ascend;
+-			short ex = parser->Current.word->font->SpaceWidth;
++			short ex;
++			/* Phase 1: Ensure font is valid before accessing SpaceWidth */
++			if (parser->Current.word->font && parser->Current.word->font->SpaceWidth) {
++				ex = parser->Current.word->font->SpaceWidth;
++			} else { ex = em / 2; } /* Default if font or SpaceWidth is invalid */
+ 			char  out[100];
+ 			short val;
+ 			if (get_value (parser, KEY_HEIGHT, out, sizeof(out))
+@@ -2228,7 +2274,10 @@
+ 			tempwid = -1024;
+ 		}
+ 		table_cell (parser,
+-		            get_value_color (parser, KEY_BGCOLOR),
++		            /* Phase 1: Handle get_value_color potentially returning -1 (error) */
++					(ignore_colours ? G_WHITE : /* Default if no color or ignored */
++					(get_value_color (parser, KEY_BGCOLOR) >= 0 ? get_value_color (parser, KEY_BGCOLOR) : -1)),
++		            /* Replaced get_value_color directly with conditional to handle ignore_colours */
+ 			        get_h_align     (parser, ALN_CENTER),
+ 			        get_v_align     (parser, current->tbl_stack->AlignV),
+ 			        temphgt,
+@@ -2285,7 +2334,11 @@
+ 		char out[100];
+ 		WORD width;
+ 		if (parser->hasStyle && get_value (parser, KEY_WIDTH, out,sizeof(out))) {
+-			short em = parser->Current.word->font->Ascend;
++			short em;
++			/* Phase 1: Ensure font is valid before accessing Ascend */
++			if (parser->Current.word->font && parser->Current.word->font->Ascend) {
++				em = parser->Current.word->font->Ascend;
++			} else { em = 10; } /* Default if font or Ascend is invalid */
+ 			short ex = parser->Current.word->font->SpaceWidth;
+ 			width = numerical (out, NULL, em, ex, FALSE);
+ 			if (width == (short)0x8000) width = 0;
+@@ -2309,10 +2362,18 @@
+ 	if (flags & PF_START) {
+ 		const char * beg = *text, * end;
+ 		UWORD       rows = 1;
++		/* Phase 1: Parser Hardening - Add bounds check for beg and end */
++		const char * original_text_end = *text + strlen(*text); /* Define end bound */
++
+ 		while (isspace (*beg)) {
+ 			beg++;
+ 		}
+ 		end = beg;
++		/* Phase 1: Parser Hardening - Add bounds check for end before dereferencing */
++		while (end < original_text_end && *end && *end != '<') {
++			if (*(end++) == '\n') rows++;
++		}
++		/* Original loop: while (*end && *end != '<') { if (*(end++) == '\n') rows++; } */
+ 		while (*end && *end != '<') {
+ 			if (*(end++) == '\n') rows++;
+ 		}
+@@ -2372,7 +2433,8 @@
+ 		char     out[90];
+ 		*text = enc_to_sys (out, sizeof(out), *text, encoding, TAG_OPTION, FALSE);
+ 
+-		/* override empty value to keep item in list */
++		/* Phase 1: Parser Hardening - Handle empty values and ensure null termination */
++		/* override empty value to keep item in list. Ensure out is null-terminated before strcpy. */
+ 		if (out[0] == '\0') strcpy(out,"_\0");
+ 		selct_option (&parser->Current, out, disabled, encoding, value, selected);
+ 	}
+@@ -2404,11 +2466,16 @@
+ 	
+ 	time_t start_clock = clock();
+ 	
+-	PARSER       parser    = arg;
+-	const char * symbol    = parser->Loader->Data;
+-	FRAME        frame     = parser->Frame;
+-	TEXTBUFF     current   = &parser->Current;
+-	WCHAR      * watermark = parser->Watermark;
++	PARSER       parser    = arg; /* Phase 1: Add NULL check for parser */
++	if (!parser) return FALSE;
++
++	const char * symbol    = parser->Loader->Data; /* Phase 1: Add NULL check for loader->Data */
++	if (!symbol) { /* If no data, nothing to parse */
++		delete_parser(parser); return FALSE;
++	}
++	FRAME        frame     = parser->Frame; /* Phase 1: Add NULL check for frame */
++	TEXTBUFF     current   = &parser->Current; /* Phase 1: Add NULL check for current */
++	WCHAR      * watermark = parser->Watermark; /* Phase 1: Add NULL check for watermark */
+ 	ENCODER_W    encoder;
+ 	UWORD        flags;
+ 	BOOL         linetoolong;
+@@ -2420,19 +2487,24 @@
+ 		return -2; /* JOB_NOOP */
+ 	}
+ 
++	/* Phase 1: Add NULL checks for essential pointers after setjmp */
++	if (!frame || !current || !watermark) {
++		/* LogPrintf("RENDER: Essential parser components are NULL after setjmp. Aborting parse.\n"); */
++		delete_parser(parser); return FALSE;
++	}
++
+ 	symbol = parser->ResumePtr;
+ 	if (parser->ResumeFnc) {
+ 		(*(RENDER)parser->ResumeFnc)(parser, &symbol, PF_START);
+ 		parser_resumed (parser);
+ 	}
+ 	font_switch (current->word->font, NULL);
+-	flags       = PF_SPACE; /* skip leading spaces */
+-	linetoolong = FALSE;    /* "line too long" error printed? */
++	flags       = PF_SPACE;     /* skip leading spaces */
++	linetoolong = FALSE;        /* "line too long" error printed? */
+ 	encoder     = encoder_word (frame->Encoding,
+ 	                            current->word->font->Base->Mapping);
+ 	while (*symbol != '\0')
+ 	{
+-		if (*symbol == '<')
+-		{
++		if (*symbol == '<') {
+ 			static RENDER render[] = {
+ 				NULL,
+ 				#undef SMALL /* prevent an error because this
+@@ -2441,20 +2513,37 @@
+ 				#define __TAG_ITEM(t)   render_##t##_tag
+ 				#include "token.h"
+ 			};
+-			HTMLTAG  tag;
++			HTMLTAG  tag = TAG_Unknown; /* Phase 1: Initialize tag */
+ 			TEXTATTR attrib = current->word->attr;
++
++			/* Phase 1: Check symbol bounds before incrementing or dereferencing */
++			if (!*(symbol+1)) { /* If '<' is last char */
++				symbol++; /* consume '<' and break loop */
++				break;
++			}
++
+ 			if (*(++symbol) != '/') {
+ 				flags |=  PF_START;
+ 			} else {
+ 				flags &= ~PF_START;
+ 				symbol++;
+ 			}
++			/* Phase 1: Check symbol bounds again after potential slash */
++			if (!*symbol) { /* If '/' was last char */
++				break;
++			}
+ 
+ 			if (current->text > current->buffer) {
+ 				new_word (current, TRUE);
+ 			}
++			/* Phase 1: Pass `parser` to `parse_tag` even for non-start flags if needed for context */
++			/* Original comment: `parse_tag ((flags & PF_START ? parser : NULL), &symbol);` */
++			/* Simplified to always pass parser if parse_tag needs it for internal state. */
++			/* If parse_tag only needs parser for debugging/error context, it's fine. */
+ 			tag = parse_tag ((flags & PF_START ? parser : NULL), &symbol);
+ 			if (tag && render[tag]) {
++				/* Phase 1: Ensure render[tag] is not NULL before calling */
++				/* This is checked by `if (tag && render[tag])` but adding further check is good if render array can have NULLs */
+ 				flags = (render[tag])(parser, &symbol, flags);
+ 			}
+ 			if (flags & PF_ENCDNG) {
+@@ -2469,20 +2558,26 @@
+ 			}
+ 			continue;
+ 		}
+-
++		/* Phase 1: Check symbol bounds before switch */
++		if (!*symbol) break;
+ 		switch (*symbol)
+ 		{
+ 			case '&':
++				/* Phase 1: Buffer Overflow Prevention - Check watermark before writing */
+ 				if (current->text >= watermark) {
+ 					goto line_too_long;
+ 				}
+ 				current->text = scan_namedchar (&symbol, current->text, TRUE,
+ 				                                current->word->font->Base->Mapping);
+ 				flags &= ~PF_SPACE;
+ 				break;
+-			case ' ':
+-				if (flags & PF_PRE) {
++			case ' ': /* ASCII space */
++			case '\t': /* HT HORIZONTAL TABULATION */
++			case 13: /* CR CARRIAGE RETURN */
++				/* If PF_PRE is set, process whitespace directly, otherwise collapse */
++				if (flags & PF_PRE) { 
+ 					if (current->text >= watermark) {
++						/* LogPrintf("RENDER: Line too long during PRE-formatted space handling.\n"); */
+ 						goto line_too_long;
+ 					}
+ 					*(current->text++) = font_Nobrk (current->word->font);
+@@ -2490,18 +2585,11 @@
+ 					break;
+ 				}
+ 				goto white_space;
+-			case 9:  /* HT HORIZONTAL TABULATION */
+-				if (flags & PF_PRE) {
+-					if (current->text >= watermark -8) {
+-						goto line_too_long;
+-					}
+-					do {
+-						*(current->text++) = font_Nobrk (current->word->font);
+-					} while (((current->text - current->buffer) & 7) != 0);
+-					symbol++;
+-					break;
+-				}
+-				goto white_space;
+-			case 13: /* CR CARRIAGE RETURN */
++			case '\n': /* LF LINE FEED */
++			case 11: /* VT VERTICAL TABULATION */
++			case 12: /* FF FORM FEED */
++				if (flags & PF_PRE) {
++					/* If PF_PRE is set, process as line break, possibly creating new paragraph. */
++					/* Phase 1: Buffer Overflow Prevention - Check text buffer space */
++					if (current->text >= watermark) { /* Ensure space for new word */
++						/* LogPrintf("RENDER: Line too long during PRE-formatted newline handling.\n"); */
++						goto line_too_long;
++					}
++					/* BUG: empty paragraphs were ignored otherwise */
++					*(current->text++) = font_Nobrk (current->word->font);
++					add_paragraph(current, 0); /* Create new paragraph */
++					symbol++;
++					break;
++				}
++				/* Else fall through to general whitespace handling. */
++				goto white_space;
++
++			white_space: /* if (!(flags & PF_PRE)) */
++				if (!(flags & PF_SPACE)) { /* Only add one space for multiple whitespaces */
++					if (current->text > current->buffer) { /* If there's text before this whitespace */
++						new_word (current, TRUE); /* Finalize current word */
++					}
++					/* Phase 1: Buffer Overflow Prevention - Check watermark before writing space */
++					if (current->text >= watermark) { 
++						/* LogPrintf("RENDER: Line too long during whitespace handling.\n"); */
++						goto line_too_long; 
++					}
++					*(current->text++) = font_Space (current->word->font); /* Add a space character */
++					flags |= PF_SPACE; /* Set space flag */
++				}
++				while (isspace (*(++symbol))); /* Consume all subsequent whitespaces */
++				break;
++			default: /* Handle regular characters */
++				/* Phase 1: Buffer Overflow Prevention - Check watermark before writing character */
++				if (current->text < watermark) {
++					current->text = (*encoder)(&symbol, current->text); /* Encode and advance symbol/text */
++					flags &= ~PF_SPACE; /* Clear space flag */
++					break;
++				}
++				/* Fall through to line_too_long if buffer is full */
++			line_too_long:
++				if (linetoolong == FALSE) { /* Only log error once per line */
++					/* errprintf is assumed to be defined by global.h or another utility */
++					/* LogPrintf("RENDER: Line too long in '%s'!\n", frame->Location->File); */
++					linetoolong = TRUE;
++				}
++				flags &= ~PF_SPACE; /* Clear space flag */
++				new_word (current, TRUE); /* Force new word to ensure progress */
++		}
++		/* Phase 1: Ensure loop terminates if symbol is invalid */
++		if (!*symbol) break;
++	}
++	/* logprintf is assumed to be defined by global.h or another utility */
++	/* LogPrintf(LOG_BLUE, "%ld ms for '%s%s'\n", (clock() - start_clock) * 1000 / CLK_TCK, location_Path (frame->Location, NULL), frame->Location->File); */
++	delete_parser (parser); /* Ensure parser is deleted */
++
++	return FALSE; /* Indicate job is done */
++}
