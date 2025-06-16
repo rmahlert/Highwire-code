@@ -1,108 +1,108 @@
 /*
  * @(#) Gemini\vaproto.h
- * @(#) Stefan Eissing, 11. Dezember 1994
+ * @(#) Stefan Eissing, December 11, 1994
  *
  *
- * Beschreibung: Definition der Nachrichten des Venus <-> Accessory
- * Protokolls
+ * Description: Definition of messages for the Venus <-> Accessory
+ * Protocol
  *
- * 07.12.: AV_PATH_UPDATE, AV_WHAT_IZIT, AV_DRAG_ON_WINDOW eingebaut.
- * 21.10.94: AV_STARTED 
- * 31.10.94: AV_XWIND und VA_FONTCHANGED eingefuehrt.
- *           Siehe auch die neue Bitbelegung in PROTOSTATUS
- * 12.11.94  Neues Bit im PROTOSTATUS des Accessories zum "Quoten"
- *           von Dateinamen
+ * Dec 07: AV_PATH_UPDATE, AV_WHAT_IZIT, AV_DRAG_ON_WINDOW added.
+ * Oct 21, 94: AV_STARTED
+ * Oct 31, 94: AV_XWIND and VA_FONTCHANGED introduced.
+ * See also the new bit assignment in PROTOSTATUS
+ * Nov 12, 94 New bit in the Accessory's PROTOSTATUS for "quoting"
+ * of filenames
  */
 
 #ifndef __vaproto__
 #define __vaproto__
 
-/* Message-Nummern fuer das xAcc-Protokoll von Konrad Hinsen
- * Venus gibt bei ACC_ID "VENUS.APP" und Gemini gibt "GEMINI.APP"
- * zurueck. Gemini unterstuetzt xAcc der Stufe 0.
+/* Message numbers for the xAcc protocol by Konrad Hinsen
+ * Venus returns "VENUS.APP" for ACC_ID and Gemini returns "GEMINI.APP".
+ * Gemini supports xAcc level 0.
  */
 #define ACC_ID		0x400
 #define ACC_OPEN	0x401
 #define ACC_CLOSE	0x402
 #define ACC_ACC		0x403
 
-/* Message-Nummern fuer die Kommunikation zwischen Venus und
- * verschiedenen Accesories.
- * Sollten in Nachrichten Pfade oder Dateinamen vorkommen, so
- * muss immer der absolute Pfad angegeben werden (also mit Laufwerk)
- * und die Laufwerksbuchstaben muessen Grossbuchstaben sein. Pfade 
- * sollten immer mit einem Backslash enden!
- * Neu seit dem 12.11.94 ist, dass optional Namen auch mit einfachen
- * Anfuehrungszeichen versehen werden koennen. Siehe AV_PROTOKOLL.
+/* Message numbers for communication between Venus and
+ * various Accessories.
+ * If paths or filenames appear in messages, the absolute path
+ * must always be specified (i.e., with drive letter)
+ * and drive letters must be uppercase. Paths
+ * should always end with a backslash!
+ * New since November 12, 1994, names can optionally be enclosed
+ * in single quotes. See AV_PROTOCOL.
  *
- * Nachrichten von Venus beginnen mit VA (Venus -> Accessory).
- * Nachrichten an Venus beginnen mit AV (Accessory -> Venus).
+ * Messages from Venus start with VA (Venus -> Accessory).
+ * Messages to Venus start with AV (Accessory -> Venus).
  *
- * Mit AV_PROTOKOLL kann jedes Acc nachfragen, welche Nachrichten
- * verstanden werden (Dies ist ja bei VENUS und GEMINI 
- * unterschiedlich! Es waere schoen, wenn auch andere Programme auf
- * dieses Protokoll reagieren wuerden. Zumindest AV_SENDKEY ist
- * sicher leicht zu implementieren und ist die einzige Methode, wie
- * ueber Nachrichten Tastaturdruecke simuliert werden koennen.
+ * With AV_PROTOCOL, each Acc can ask which messages
+ * are understood (This is different for VENUS and GEMINI!
+ * It would be nice if other programs would also react to
+ * this protocol. At least AV_SENDKEY is
+ * certainly easy to implement and is the only method by which
+ * keyboard presses can be simulated via messages.
  *
- * Unter normalem TOS fragt dazu ein Accessory, wenn es eine
- * AC_CLOSE-Nachricht vom AES erhalten hat, die Applikation 0
- * mit AV_PROTOKOLL, ob sie etwas davon versteht.
- * Unter MultiTOS muss aber das Programm nicht mehr die ID 0
- * haben, zudem kommt es (fast) nicht mehr zu AC_CLOSE-Nachrichten.
- * Es koennen auch nicht nur Accessories, sondern auch normale
- * Programme mit Gemini kommunizieren wollen. Was tun?
- * Wenn es mehr als eine Hauptapplikation geben kann, dann sollte
- * das Programm/Accessory versuchen, mit GEMINI Kontakt aufzunehmen.
- * Die ID kann ja mit appl_find ermittelt werden. Scheitert dies, so
- * kann noch nach AVSERVER oder dem Inhalt der (AES-)Environmentvariable
- * AVSERVER gesucht werden. Besonders die letzte Moeglichkeit erlaubt
- * eine leichte Konfiguration "von aussen". Die neuen Versionen der
- * Library VAFUNC von Stephan Gerle (in gutsortierten Mailboxen
- * erhaeltlich) verfahren fast genauso.
+ * Under normal TOS, an Accessory asks application 0 with
+ * AV_PROTOCOL if it understands anything about it, when it has received
+ * an AC_CLOSE message from the AES.
+ * Under MultiTOS, however, the program no longer needs to have ID 0,
+ * and AC_CLOSE messages (almost) no longer occur.
+ * Not only Accessories, but also normal programs might want
+ * to communicate with Gemini. What to do?
+ * If there can be more than one main application, the program/accessory
+ * should try to contact GEMINI.
+ * The ID can be determined with appl_find. If this fails,
+ * one can still search for AVSERVER or the content of the (AES-)Environment
+ * variable AVSERVER. Especially the latter option allows
+ * easy configuration "from the outside". The new versions of
+ * the library VAFUNC by Stephan Gerle (available in well-stocked
+ * mailboxes) proceed almost exactly the same way.
  */
 
-/* AV_PROTOKOLL: Mit dieser Nachrichtennummer sollte man bei 
- * anderen Applikationen und auch GEMINI nachfragen, ob
- * und welche Nachrichten sie versteht.
+/* AV_PROTOCOL: With this message number, one should ask
+ * other applications and GEMINI if
+ * and which messages they understand.
  */
 
-#define AV_PROTOKOLL		0x4700
+#define AV_PROTOCOL		0x4700
 /*
- * Word 6+7: Pointer auf den Accessorynamen, wie er bei
- *           appl_find benutzt werden muss; also 8 Zeichen lang
- *           nullterminiert (char name[9]).
- * Die Bits in den Worten 3, 4 und 5 haben folgende Bedeutung:
+ * Word 6+7: Pointer to the Accessory name, as it must be used
+ * with appl_find; i.e. 8 characters long
+ * null-terminated (char name[9]).
+ * The bits in words 3, 4 and 5 have the following meaning:
  * Word 3:
  * Bit 0:		(VA_SETSTATUS)
  * Bit 1:		(VA_START)
  * Bit 2:       (AV_STARTED)
  * Bit 3:       (VA_FONTCHANGED)
- * Bit 4:       (Versteht und benutzt Quoting von Dateinamen)
+ * Bit 4:       (Understands and uses quoting of filenames)
  *
- * Alle anderen Bits sind fuer Erweiterungen reserviert und sollten
- * daher mit 0 vorbesetzt werden. Das gilt natuerlich auch fuer die
- * Bits in den Worten 4 und 5.
- * (Mehr zum Quoting siehe unten)
+ * All other bits are reserved for extensions and should
+ * therefore be pre-set to 0. This also applies, of course, to the
+ * bits in words 4 and 5.
+ * (More on quoting see below)
  */
- 
-/* Macros zum Testen des Protkollstatus auf Quoting
+
+/* Macros for testing the protocol status for quoting
  */
 #define VA_ACC_QUOTING(a)		((a) & 0x10)
 #define VA_SERVER_QUOTING(a)	((a) & 0x4000)
 
-/* VA_PROTOSTATUS: Dem Sender von AV_PROTOKOLL wird mitgeteilt, dass
- * der Empfaenger etwas von diesem Protokoll weiss. Die Worte 3-7 des
- * Nachrichtenpuffers enthalten die Information, welche Nachrichten
- * verstanden werden. Gesetzte Bits stehen dafuer, dass eine Nachricht
- * (Nachrichtengruppe) verstanden werden. 
+/* VA_PROTOSTATUS: The sender of AV_PROTOCOL is informed that
+ * the recipient knows something about this protocol. Words 3-7 of the
+ * message buffer contain the information about which messages
+ * are understood. Set bits mean that a message
+ * (message group) is understood.
  */
 #define VA_PROTOSTATUS		0x4701
 /*
- * Word 6+7: Pointer auf den Programmnamen, wie er bei
- *           appl_find benutzt werden muss; also 8 Zeichen lang
- *           nullterminiert (char name[9]).
- * Die Bits in den Worten 3, 4 und 5 haben folgende Bedeutung:
+ * Word 6+7: Pointer to the program name, as it must be used
+ * with appl_find; i.e. 8 characters long
+ * null-terminated (char name[9]).
+ * The bits in words 3, 4 and 5 have the following meaning:
  * Word 3:
  * Bit 0		(AV_SENDKEY)
  * Bit 1		(AV_ASKFILEFONT)
@@ -118,251 +118,244 @@
  * Bit 11       (AV_XWIND)
  * Bit 12       (VA_FONTCHANGED)
  * Bit 13		(AV_STARTED)
- * Bit 14       (Versteht und benutzt Quoting von Dateinamen)
+ * Bit 14       (Understands and uses quoting of filenames)
  *
- * Alle anderen Bits sind fuer Erweiterungen reserviert und sollten
- * daher mit 0 vorbesetzt werden. Das gilt natuerlich auch fuer die
- * Bits in den Worten 4 und 5.
+ * All other bits are reserved for extensions and should
+ * therefore be pre-set to 0. This also applies, of course, to the
+ * bits in words 4 and 5.
  *
- * AV_SENDKEY kann sicher jeder leicht in seine Programme einbauen.
- * Bei AV_OPENWIND koennte ein Hauptprogramm auch seine "normale"
- * Routine zum oeffnen eines Dokumentes anwerfen und dabei den
- * uebergebenen Pfad benutzen. Dies ist zusammen mit der Benutzung
- * von TreeView sicher eine einfache Art, Dateien aus anderen Ordnern
- * oder Laufwerken zu laden.
+ * AV_SENDKEY can certainly be easily integrated into any program.
+ * For AV_OPENWIND, a main program could also launch its "normal"
+ * routine for opening a document and use the
+ * passed path. This, together with the use
+ * of TreeView, is certainly a simple way to load files from other
+ * folders or drives.
  *
- * Zu Bit 14 (im Server, z.B. Gemini), bzw. Bit 4 im Client 
+ * Regarding Bit 14 (in the Server, e.g. Gemini), or Bit 4 in the Client
  * (Accessory):
- * Mit "Quoting" ist im VA-Protkoll gemeint, dass Dateinamen optional
- * mit einfachen Anfuehrungszeichen 'name' versehen werden koennen.
- * Dies ist aber nur erlaubt, wenn beide Parteien (Server und Client)
- * sich darueber einig sind (lies: beide es verstehen koennen).
- * Wie geht das also vor sich? Angenommen Gemini schickt an ein
- * Accessory einen Dateinamen, der ein Leerzeichen enthaelt. Ein Acc,
- * das Quoting nicht kann, wird statt einem zwei Dateinamen erkennen,
- * da normalerweise Leerzeichen Dateinamen trennen.
- * Versteht das Acc aber Quoting (Bit 4 in seinem Protokollstatus),
- * so wird Gemini den Dateinamen mit '' umgeben und das Acc erkennt,
- * dass das Leerzeichen zum Dateinamen gehoert.
- * Gleiches gilt natuerlich auch fuer Dateinamen, die von einem Acc
- * an einen Server geschickt werden. Die Frage bleibt, wie man denn
- * nun einfache Anfuehrungszeichen uebertraegt. Nun, solche Zeichen,
- * die zum Dateinamen gehoeren, werden einfach verdoppelt. Aus
- * Julian's Profibuch wird fuer die Uebertragung 'Julian''s Profibuch'.
- * Einfach nicht? Nun, die Idee stammt nicht von mir, sondern wird
- * genauso auch in Atari's Drag&Drop Protokoll benutzt.
+ * "Quoting" in the VA-protocol means that filenames can optionally
+ * be enclosed in single quotes 'name'.
+ * However, this is only allowed if both parties (Server and Client)
+ * agree on it (read: both can understand it).
+ * So how does this work? Suppose Gemini sends a filename containing
+ * a space to an Accessory. An Acc that cannot quote will recognize
+ * two filenames instead of one, as spaces normally separate filenames.
+ * If the Acc understands quoting (Bit 4 in its protocol status),
+ * Gemini will enclose the filename in '' and the Acc recognizes
+ * that the space belongs to the filename.
+ * The same, of course, applies to filenames sent by an Acc
+ * to a Server. The question remains how to transmit single quotes.
+ * Well, such characters that belong to the filename are simply
+ * doubled. From Julian's Profibuch, 'Julian''s Profibuch' is transmitted.
+ * Simple, isn't it? Well, the idea is not mine, but is used
+ * in exactly the same way in Atari's Drag&Drop protocol.
  */
 
-/* AV_GETSTATUS: Ein Accessory erfragt bei Venus den aktuellen
- * Status, den es Venus mit AV_STATUS mal gegeben hat.
+/* AV_GETSTATUS: An Accessory asks Venus for its current
+ * status, which it previously gave to Venus with AV_STATUS.
  */
 #define AV_GETSTATUS		0x4703
 
-/* AV_STATUS: Ein Accessory kann Venus seinen Status mitteilen,
- * der dann von Venus im INF-File gespeichert wird und mit
- * AV_GETSTATUS wieder abgerufen werden kann.
- * Zuvor MUSS es sich aber mit AV_PROTOKOLL anmelden!
- * Word 3+4: Pointer auf einen String, der keine Steuerzeichen
- *           enthalten darf und nicht laenger als 256 Zeichen
- *           sein darf. Dieser Pointer darf allerdings NULL sein.
+/* AV_STATUS: An Accessory can inform Venus of its status,
+ * which is then saved by Venus in the INF file and can be
+ * retrieved again with AV_GETSTATUS.
+ * Before that, it MUST register itself with AV_PROTOCOL!
+ * Word 3+4: Pointer to a string, which must not contain control characters
+ * and must not be longer than 256 characters.
+ * This pointer can, however, be NULL.
  */
 #define AV_STATUS			0x4704
 
-/* VA_SETSTATUS: Venus teilt dem Accessory den abgespeicherten
- * Status bei Nachfrage durch AV_GETSTATUS mit. Dieser kann dann 
- * von einem Accessory gesetzt werden.
- * Word 3+4: Pointer auf einen String, der keine Steuerzeichen
- *           enthaelt.
- *           Dieser Pointer kann allerdings NULL sein, dann war
- *           kein Status gespeichert.
+/* VA_SETSTATUS: Venus communicates the saved status to the Accessory
+ * upon request via AV_GETSTATUS. This can then be set by an Accessory.
+ * Word 3+4: Pointer to a string that contains no control characters.
+ * This pointer can, however, be NULL; in that case,
+ * no status was saved.
  */
 #define VA_SETSTATUS		0x4705
 
-/* AV_SENDKEY: Ein Acc sendet VENUS/GEMINI einen Tastaturevent, den
- * es selber vielleicht nicht versteht.
- * Word 3 = Tastaturstatus                 ev_mmokstate
- * Word 4 = Scancode der gedrueckten Taste  ev_mkreturn
+/* AV_SENDKEY: An Acc sends a keyboard event to VENUS/GEMINI that
+ * it itself might not understand.
+ * Word 3 = Keyboard status             ev_mmokstate
+ * Word 4 = Scancode of the pressed key  ev_mkreturn
  */
 #define	AV_SENDKEY			0x4710
 
-/* VA_START: Accessory wird aktiviert. Word 3 + 4 enthalten einen
- * Pointer auf eine Kommandozeile, der auch NULL sein kann.
- * In der Kommandozeile stehen Pfade oder Dateinamen.
+/* VA_START: Accessory is activated. Word 3 + 4 contain a
+ * pointer to a command line, which can also be NULL.
+ * The command line contains paths or filenames.
  */
 #define VA_START			0x4711
 
-/* AV_ASKFILEFONT: Frage nach dem eingestellten Zeichensatz
- * fuer Dateinamen.
+/* AV_ASKFILEFONT: Query for the set character set
+ * for filenames.
  */
 #define AV_ASKFILEFONT		0x4712
 
-/* VA_FILEFONT: Gibt den derzeit eingestellten Zeichensatz.
- * Word 3 = Dateifontnummer (font id)
- * Word 4 = Dateifontgroesse (in points)
+/* VA_FILEFONT: Returns the currently set character set.
+ * Word 3 = File font number (font id)
+ * Word 4 = File font size (in points)
  */
 #define VA_FILEFONT			0x4713
 
-/* (Nur Gemini) AV_ASKCONFONT: Frage nach dem eingestellten 
- * Zeichensatz fuer das Console-Fenster.
+/* (Gemini only) AV_ASKCONFONT: Query for the set
+ * character set for the Console window.
  */
 #define AV_ASKCONFONT		0x4714
 
-/* VA_CONFONT: Gibt den derzeit eingestellten Zeichensatz.
- * Word 3 = Consolefontnummer (font id)
- * Word 4 = Consolefontgroesse (in points)
+/* VA_CONFONT: Returns the currently set character set.
+ * Word 3 = Console font number (font id)
+ * Word 4 = Console font size (in points)
  */
 #define VA_CONFONT			0x4715
 
-/* AV_ASKOBJECT: Fragt nach dem derzeit selektiertem Objekt.
- * Es wird der Name des derzeit selektierten Objektes zurueckgegeben.
- * Ist kein Objekt selektiert, so ist der String leer.
- * Sind mehrere Objekte selektiert, so sind ihre Namen durch Leer-
- * zeichen getrennt.
+/* AV_ASKOBJECT: Queries for the currently selected object.
+ * The name of the currently selected object is returned.
+ * If no object is selected, the string is empty.
+ * If multiple objects are selected, their names are separated by spaces.
  */
 #define AV_ASKOBJECT	0x4716
 
-/* VA_OBJECT: Gibt Namen der derzeit selektierten Objekte.
- * Aufbau wie bei VA_START
+/* VA_OBJECT: Returns names of the currently selected objects.
+ * Structure as in VA_START
  */
 #define VA_OBJECT		0x4717
 
-/* (Nur Gemini)AV_OPENCONSOLE: Venus soll das Console-Fenster oeffnen.
- * Ist es schon offen, so wird es nach vorne gebracht. Diese Aktion
- * ist vor allen Dingen sinnvoll, wenn ein Accessory ein TOS-Programm
- * mittels der system()-Funktion starten will (Warnung: Auf keinen
- * Fall darf ein GEM-Programm von einem Accessory via system() 
- * gestartet werden! (siehe auch AV_STARTPROG)
- * Auch sollte diese Nachricht nur auf ausdruecklichen Wunsch des
- * Benutzers gebraucht werden, da es ihn sonst nur verwirren kann.
+/* (Gemini only)AV_OPENCONSOLE: Venus should open the Console window.
+ * If it is already open, it is brought to the front. This action
+ * is especially useful if an Accessory wants to start a TOS program
+ * using the system() function (Warning: A GEM program must
+ * never be started by an Accessory via system()! (see also AV_STARTPROG)
+ * Also, this message should only be used at the explicit request of the
+ * user, as it can otherwise only confuse them.
  *
- * ACHTUNG: Diese Nachricht steht nur in Gemini.app zur Verfuegung.
+ * ATTENTION: This message is only available in Gemini.app.
  */
 #define AV_OPENCONSOLE	0x4718
 
-/* VA_CONSOLEOPEN: Gibt zurueck, ob das Console-Fenster nach vorne
- * gebracht worden ist. Word 3 == 0 (nein) != 0 (ja)
+/* VA_CONSOLEOPEN: Returns whether the Console window has been
+ * brought to the front. Word 3 == 0 (no) != 0 (yes)
  */
 #define VA_CONSOLEOPEN	0x4719
 
-/* AV_OPENWIND: Venus soll ein Datei-Fenster oeffnen.
- * Dies sollte auch nur geschehen, wenn die Ursache fuer den
- * Benutzer ersichtlich ist.
- * Word 3+4 (Pointer) Pfad fuer das Fenster (s.o.).
- * Word 5+6 (Pointer) Wildcard fuer darzustellende Dateien.
+/* AV_OPENWIND: Venus should open a file window.
+ * This should also only happen if the cause is
+ * apparent to the user.
+ * Word 3+4 (Pointer) Path for the window (see above).
+ * Word 5+6 (Pointer) Wildcard for files to be displayed.
  */
 #define AV_OPENWIND		0x4720
 
-/* VA_WINDOPEN: Gibt an, ob das Fenster geoeffnet werden konnte.
- * siehe VA_CONSOLEOPEN
+/* VA_WINDOPEN: Indicates whether the window could be opened.
+ * see VA_CONSOLEOPEN
  */
 #define VA_WINDOPEN		0x4721
 
 
-/* Word 7 in AV_STARTPROG und Word 4 und 7 in VA_PROGSTART sind
- * neu seit dem 29. Maerz 1992.
+/* Word 7 in AV_STARTPROG and Words 4 and 7 in VA_PROGSTART are
+ * new since March 29, 1992.
  */
- 
-/* AV_STARTPROG: Venus soll ein Programm starten. Hierbei
- * werden die angemeldeten Applikationen der Venus mit
- * beruecksichtigt. Man kann also auch eine Datei angeben, fuer
- * die Venus dann ein Programm sucht.
- * Word 3+4 (Pointer) Programmname mit kompletten Pfad
- * Word 5+6 (Pointer) Kommandozeile (kann NULL sein)
- * Word 7   Beliebiges 16-Bit Wort, das in VA_PROGSTART wieder
- *          zurueckgeliefert wird.
+
+/* AV_STARTPROG: Venus should start a program. Here,
+ * the registered applications of Venus are
+ * considered. So you can also specify a file for
+ * which Venus then searches for a program.
+ * Word 3+4 (Pointer) Program name with complete path
+ * Word 5+6 (Pointer) Command line (can be NULL)
+ * Word 7    Arbitrary 16-bit word that is
+ * returned in VA_PROGSTART.
  */
 #define AV_STARTPROG	0x4722
 
-/* VA_PROGSTART: Gibt an, ob Venus das Programm startet.
- * Word 3 == 0: nicht gestartet, != 0 gestartet
- * Im Allgemeinen wird das Acc. im Fehlerfall sofort eine
- * Nachricht bekommen. Wenn das Programm aber gestartet wird, erhaelt
- * das Acc. diese Nachricht erst nach dem Start des Programms, da
- * die Routine, die den Pexec macht nicht mehr wissen kann, das ein
- * Acc. noch schnell eine Nachricht bekommen muss. Bei einem GEM-
- * Programm, kann man der Erfolg auch an dem AC_CLOSE erkennen.
- * Auch ist die Fehlererkennung nicht optimal. Der Rueckgabewert weist
- * auch nicht aus, das das Programm fehlerfrei gelaufen ist.
+/* VA_PROGSTART: Indicates whether Venus starts the program.
+ * Word 3 == 0: not started, != 0 started
+ * Generally, the Acc will immediately receive a message in case of an error.
+ * However, if the program is started, the Acc will only receive
+ * this message after the program has started, as the routine
+ * that performs the Pexec can no longer know that an Acc still needs
+ * to receive a message quickly. For a GEM program, success can also
+ * be recognized by AC_CLOSE.
+ * Also, error detection is not optimal. The return value does not
+ * indicate that the program ran without errors.
  *
- * Word 4   Returncode des gestarteten Programms (so vorhanden)
- * Word 7   16-Bit Wort aus AV_STARTPROG
+ * Word 4    Return code of the started program (if available)
+ * Word 7    16-bit word from AV_STARTPROG
  */
 #define VA_PROGSTART	0x4723
 
-/* AV_ACCWINDOPEN: Mit dieser Nachricht kann ein Acc Venus mitteilen, dass
- * es ein Fenster geoeffnet hat.
- * Word 3 AES-Handle des geoeffneten Fensters
+/* AV_ACCWINDOPEN: With this message, an Acc can inform Venus that
+ * it has opened a window.
+ * Word 3 AES-Handle of the opened window
  */
 #define AV_ACCWINDOPEN	0x4724
 
-/* VA_DRAGACCWIND: Venus teilt dem Acc mit, dass Objekte auf eines seiner
- * mittels AV_ACCWINDOPEN angemeldeten Fenster gezogen worden sind.
- * Word 3   AES-Handle des Fensters
- * Word 4   X-Position der Maus
- * Word 5   Y-Position der Maus
- * Word 6+7 Pointer auf einen String, der die Namen der Objekte enthaelt.
+/* VA_DRAGACCWIND: Venus informs the Acc that objects have been
+ * dragged onto one of its windows registered with AV_ACCWINDOPEN.
+ * Word 3    AES-Handle of the window
+ * Word 4    X-position of the mouse
+ * Word 5    Y-position of the mouse
+ * Word 6+7 Pointer to a string containing the names of the objects.
  */
 #define VA_DRAGACCWIND	0x4725
 
-/* AV_ACCWINDCLOSED: Acc teilt Venus mit, dass sein Fenster geschlossen
- * wurde. Dies braucht das Acc nur in dem Fall zu tun, wenn es selbst das
- * Fenster schliesst. Bekommt es eine AC_CLOSE Mitteilung vom AES, so weiss
- * Venus schon, dass alle Fenster weg sind.
- * Word 3   AES-Handle des Fensters
+/* AV_ACCWINDCLOSED: Acc informs Venus that its window has been closed.
+ * The Acc only needs to do this if it closes the window itself.
+ * If it receives an AC_CLOSE message from the AES, Venus already
+ * knows that all windows are gone.
+ * Word 3    AES-Handle of the window
  */
 #define AV_ACCWINDCLOSED	0x4726
 
 
-/* Neu seit dem 11.04.1991!!!
+/* New since April 11, 1991!!!
  */
- 
-/* AV_COPY_DRAGGED: Accessorie teilt Venus mit, dass die Objekte,
- * die auf sein Fenster gezogen wurden, zu kopieren sind.
- * Dies kann z.B. nach dem Ziehen von Objekten auf das TreeView-
- * Fenster erwuenscht sein. Diese Nachricht ist nur als Antwort
- * auf VA_DRAGACCWIND gedacht.
- * Word 3	Tastaturstatus (Alternate, Control, Shift)
- * Word 4+5	Pointer auf einen String, der den Namen des Zielobjektes 
- *			enthaelt. Dies *muss* ein Pfad sein!
+
+/* AV_COPY_DRAGGED: Accessory informs Venus that the objects
+ * dragged onto its window are to be copied.
+ * This can be desired, for example, after dragging objects to the
+ * TreeView window. This message is only intended as a response
+ * to VA_DRAGACCWIND.
+ * Word 3	Keyboard status (Alternate, Control, Shift)
+ * Word 4+5	Pointer to a string containing the name of the target object.
+ * This *must* be a path!
  */
 #define AV_COPY_DRAGGED		0x4728
 
-/* VA_COPY_COMPLETE: Antwort auf AV_COPY. 
- * Word 3	Status des Kopierens. (!= 0 heisst, dass wirklich etwas
- *			kopiert oder verschoben wurde. Dies kann das Acc evtl.
- *          zum Neuaufbau seines Fensters nutzen.)
+/* VA_COPY_COMPLETE: Reply to AV_COPY.
+ * Word 3	Status of the copy. (!= 0 means that something was
+ * actually copied or moved. The Acc can possibly use this
+ * to rebuild its window.)
  */
 #define VA_COPY_COMPLETE	0x4729
 
 
-/* AV_PATH_UPDATE: Programm/Accessory teilt Gemini mit, dass sich
- * der Inhalt eines Verzeichnisses geaendert hat. Gemini stellt dann
- * dieses Verzeichnis (so ein Fenster davon offen ist) neu dar. Dies
- * wirkt auch auf die Unterverzeichnisse; Update von "C:\" sorgt
- * dafuer, dass alles, was mit Laufwerk C:\ zu tun hat, neu eingelesen
- * wird.
+/* AV_PATH_UPDATE: Program/Accessory informs Gemini that the content
+ * of a directory has changed. Gemini then redraws this directory
+ * (if a window of it is open). This
+ * also affects subdirectories; an update of "C:\" ensures
+ * that everything related to drive C:\ is re-read.
  *
- * Word 3+4 Pointer auf den absolten Pfad
+ * Word 3+4 Pointer to the absolute path
  */
 #define AV_PATH_UPDATE		0x4730
 
 
-/* AV_WHAT_IZIT: Programm/Accessory fragt Gemini, was sich an 
- * Position X/Y auf dem Bildschirm befindet. Die Koordinaten sind
- * normale Pixelkoordinaten mit Ursprung in der linken oberen
- * Bildschirmecke. Antwort ist VA_THAT_IZIT.
- * Word 3   X-Koordinate
- * Word 4   Y-Koordinate
+/* AV_WHAT_IZIT: Program/Accessory asks Gemini what is at
+ * position X/Y on the screen. The coordinates are
+ * normal pixel coordinates with the origin in the top left
+ * corner of the screen. The answer is VA_THAT_IZIT.
+ * Word 3    X-coordinate
+ * Word 4    Y-coordinate
  */
 #define AV_WHAT_IZIT		0x4732
 
 /* VA_THAT_IZIT:
- * Word 3   ID der zustaendigen Applikation
- * Word 4   Typ des Objektes
- * word 5+6 Zeiger auf den Namen des Objektes (oder NULL, falls nicht 
- *          vorhanden)
+ * Word 3    ID of the responsible application
+ * Word 4    Type of the object
+ * Word 5+6 Pointer to the name of the object (or NULL if not
+ * available)
  *
- * Typ ist wie folgt: (alle anderen fuer Erweiterungen reserviert.)
+ * Type is as follows: (all others reserved for extensions.)
  */
 #define	VA_OB_UNKNOWN	0
 #define VA_OB_TRASHCAN  1
@@ -375,84 +368,81 @@
 
 #define VA_THAT_IZIT		0x4733
 
-/* AV_DRAG_ON_WINDOW: Programm/Accessory teilt Gemini mit, dass 
- * Objekte auf eines seiner mittels AV_WHATIZIT erfragten Fenster 
- * gezogen worden sind. Die Namen sind Namen von Dateien, Ordnern
- * oder Laufwerken, jeweils durch ein Leerzeichen getrennt. Namen
- * von Ordnern oder Laufwerken enden mit einem Backslash.
+/* AV_DRAG_ON_WINDOW: Program/Accessory informs Gemini that
+ * objects have been dragged onto one of its windows queried
+ * via AV_WHATIZIT. The names are names of files, folders,
+ * or drives, each separated by a space. Names
+ * of folders or drives end with a backslash.
  *
- * Word 3   X-Position, wohin die Maus gezogen wurde
- * Word 4   Y-Position, wohin die Maus gezogen wurde
- * Word 5   Tastaturstatus (Shift,Control,Alternate)
- * Word 6+7 Pointer auf einen String, der die Namen der Objekte enthaelt.
+ * Word 3    X-position where the mouse was dragged
+ * Word 4    Y-position where the mouse was dragged
+ * Word 5    Keyboard status (Shift, Control, Alternate)
+ * Word 6+7 Pointer to a string containing the names of the objects.
  *
- * (nun implementiert, beachte dass sich die Belegung der Nachricht
- *  leicht geaendert hat. Das Fenster handle ist verschwunden und 
- *  dafuer wurde der aktuelle Tastaturstatus eingefuegt.)
+ * (now implemented, note that the message's
+ * layout has slightly changed. The window handle is gone and
+ * the current keyboard status has been added instead.)
  *
  */
 #define AV_DRAG_ON_WINDOW	0x4734
 
-/* VA_DRAG_COMPLETE: Die Aktion, die mittels AV_DRAG_ON_WINDOW
- * ausgeloest wurde (Kopieren, Verschieben, Loeschen oder ablegen
- * auf den Hintergrund) ist beendet. Bei Erfolg wird ein Wert
- * wie bei AV_COPY_COMPLETE zurueckgeliefert.
- * Word 3	Status der Aktion. (!= 0 heisst, dass wirklich etwas
- *			kopiert oder verschoben wurde. Dies kann das Acc evtl.
- *          zum Neuaufbau seines Fensters nutzen.)
+/* VA_DRAG_COMPLETE: The action initiated via AV_DRAG_ON_WINDOW
+ * (copying, moving, deleting or dropping onto the background)
+ * is complete. On success, a value similar to AV_COPY_COMPLETE
+ * is returned.
+ * Word 3	Status of the action. (!= 0 means that something was
+ * actually copied or moved. The Acc can possibly use this
+ * to rebuild its window.)
  */
 #define VA_DRAG_COMPLETE	0x4735
 
-/* AV_EXIT: Ein Programm/Accessory teilt Gemini mit, dass es nicht
- * mehr am Protokoll teilnimmt (normalerweisem, weil es beendet
- * wurde).
- * Word 3   AES-ID des Programms/Accessories
+/* AV_EXIT: A program/Accessory informs Gemini that it no
+ * longer participates in the protocol (normally, because it has
+ * terminated).
+ * Word 3    AES-ID of the program/Accessory
  */
 #define AV_EXIT				0x4736
 
-/* AV_STARTED: Ein Programm/Accessory teilt Gemini mit, dass es
- * die VA_START Nachricht verstanden hat und der Speicher des
- * Strings, der an die Nachricht angehaengt war, freigegeben werden
- * kann. Zum Erkennen um welche VA_START Nachricht es sich handelt,
- * werden die Werte von VA_START zurueckgeliefert.
- * Word 3+4: exakt derselbe Inhalt der VA_START Nachricht.
+/* AV_STARTED: A program/Accessory informs Gemini that it
+ * understood the VA_START message and the memory of the
+ * string attached to the message can be freed. To identify
+ * which VA_START message it is, the values from VA_START are returned.
+ * Word 3+4: exactly the same content as the VA_START message.
  */
-#define AV_STARTED          0x4738
+#define AV_STARTED      0x4738
 
-/* VA_FONTCHANGED: Einer der in Gemini eingestellen Fonts hat
- * sich geaendert. Wird an alle Applikationen geschickt, die schon
- * mal den Font von Gemini erfragt haben.
+/* VA_FONTCHANGED: One of the fonts set in Gemini has
+ * changed. Sent to all applications that have already
+ * queried Gemini's font.
  *
- * Word 3 = Dateifontnummer   (font id)
- * Word 4 = Dateifontgroesse    (in points)
- * Word 5 = Consolefontnummer (font id)
- * Word 6 = Consolefontgroesse  (in points)
+ * Word 3 = File font number    (font id)
+ * Word 4 = File font size      (in points)
+ * Word 5 = Console font number (font id)
+ * Word 6 = Console font size   (in points)
  */
 #define VA_FONTCHANGED		0x4739
 
-/* AV_XWIND: Venus soll ein Datei-Fenster oeffnen (eXtended).
- * Dies sollte auch nur geschehen, wenn die Ursache fuer den
- * Benutzer ersichtlich ist.
- * Word 3+4 (Pointer) Pfad fuer das Fenster (s.o.).
- * Word 5+6 (Pointer) Wildcard als Filter fuer Anzeige
- * Word 7   Bitmaske  0x0001 - toppe evtl. vorhandenes Fenter
- *                    0x0002 - Wildcard soll nur selektieren
- *                           - alle anderen Bits auf 0 setzen!
+/* AV_XWIND: Venus should open a file window (eXtended).
+ * This should also only happen if the cause is
+ * apparent to the user.
+ * Word 3+4 (Pointer) Path for the window (see above).
+ * Word 5+6 (Pointer) Wildcard as filter for display
+ * Word 7    Bitmask  0x0001 - bring existing window to top if present
+ * 0x0002 - Wildcard should only select
+ * - set all other bits to 0!
  */
 #define AV_XWIND		0x4740
 
-/* VA_XOPEN: Gibt an, ob das Fenster geoeffnet werden konnte.
- * (Word 3 == 0 (nein) != 0 (ja))
+/* VA_XOPEN: Indicates whether the window could be opened.
+ * (Word 3 == 0 (no) != 0 (yes))
  */
 #define VA_XOPEN		0x4741
 
 #endif
 
-
-
 #define PDF_AV_OPEN_FILE		0x5000									/* Opens new file										*/
 #define PDF_AV_CLOSE_FILE		0x5001									/* Closes an already opened file		*/
 #define PDF_AV_PRINT_FILE		0x5002									/* Print an file										*/
-#define PDF_AV_FIND_WORD		0x5003									/* Looks for an word in a document	*/
-#define PDF_AV_SHOW_INFO		0x5004									/* Shows info about an document			*/
-#define PDF_AV_GET_INFO			0x5005									/* Gives back info about an PDF			*/
+#define PDF_AV_FIND_WORD		0x5003									/* Looks for a word in a document	*/
+#define PDF_AV_SHOW_INFO		0x5004									/* Shows info about a document			*/
+#define PDF_AV_GET_INFO			0x5005									/* Gives back info about a PDF			*/
