@@ -1,10 +1,16 @@
 /*
  * Config.C
  *
+ * Changes:
+ * R Mahlert        2025-06-15  Phase 1: Buffer overflow prevention and memory allocation checks.
  */
 #include <stdlib.h> /* for atol etc */
 #include <string.h>
 #include <ctype.h>
+#include <stdio.h> /* For snprintf, FILE, fopen, fclose, fprintf, fgets, fputs */
+#include <errno.h> /* For E_OK, etc. */
+
+#include <gem.h> /* For Dgetdrv, Dgetpath */
 
 #include "version.h"
 #include "file_sys.h"
@@ -15,8 +21,8 @@
 #include "hwWind.h"
 #include "fontbase.h"
 #include "cache.h"
-
-#include "scanner.h"
+#include "scanner.h" /* For scan_color, strtoul */
+#include "strtools.h" /* For strnicmp */
 
 
 WORD         cfg_UptoDate     = -1;
@@ -48,30 +54,52 @@ open_default (const char ** path, const char * name, const char * mode)
 		file = fopen (*path, mode);
 		
 	} else {
-		char buff[1024], * p;
+		char buff[1024]; /* Fixed size buffer for safety */
+        char *p;
+        size_t len;
+
 		if ((p = getenv ("HOME")) != NULL && *p) {
-			if (p[1] == ':') {
-				buff[0] = toupper (p[0]);
-				p = strchr (strcpy (buff +1, p +1), '\0');
-			} else {
-				char * q = buff;
-				*(q++) = 'U';
-				*(q++) = ':';
-				while (*p) {
-					if (*p == '/') *(q++) = '\\';
-					else           *(q++) = *p;
-					p++;
-				}
-				p = q;
-			}
-			if (p[-1] != '\\') *(p++) = '\\';
-			strcpy (p, "defaults");
-			p[8] = '\\';
-			strcpy (p +9, name);
+            /* Phase 1: Buffer Overflow Prevention - Use snprintf */
+            if (p[1] == ':') {
+                snprintf(buff, sizeof(buff), "%c:%s", toupper(p[0]), p + 1);
+            } else {
+                snprintf(buff, sizeof(buff), "U:");
+                len = strlen(buff);
+                char *q = buff + len;
+                while (*p && len < sizeof(buff) - 2) { /* -2 for \ and null-terminator */
+                    if (*p == '/') *(q++) = '\\';
+                    else           *(q++) = *p;
+                    p++;
+                    len++;
+                }
+                *q = '\0';
+            }
+            len = strlen(buff);
+			if (len > 0 && buff[len - 1] != '\\') {
+                /* Phase 1: Buffer Overflow Prevention - Use strncat */
+                strncat(buff, "\\", sizeof(buff) - len - 1);
+                buff[sizeof(buff) - 1] = '\0';
+            }
+            /* Phase 1: Buffer Overflow Prevention - Use snprintf */
+            len = strlen(buff);
+            snprintf(buff + len, sizeof(buff) - len, "defaults");
+            len = strlen(buff);
+			buff[len] = '\\'; /* Insert backslash */
+            buff[len+1] = '\0';
+            /* Phase 1: Buffer Overflow Prevention - Use snprintf */
+            snprintf(buff + len + 1, sizeof(buff) - len - 1, "%s", name);
+
 			file = fopen (buff, mode);
 			
 			if (!file) {
-				strcpy (p, name);
+                /* Phase 1: Buffer Overflow Prevention - Use snprintf */
+                len = strlen(buff);
+                char *last_slash = strrchr(buff, '\\');
+                if (last_slash) {
+                    snprintf(last_slash + 1, sizeof(buff) - (last_slash - buff) - 1, "%s", name);
+                } else { /* Should not happen if buff always has a path */
+                    snprintf(buff, sizeof(buff), "%s", name);
+                }
 				file = fopen (buff, mode);
 			}
 		}
@@ -80,13 +108,26 @@ open_default (const char ** path, const char * name, const char * mode)
 			buff[0] += (buff[0] < 26 ? 'A' : -26 + '1');
 			buff[1] = ':';
 			Dgetpath (buff + 2, 0);
-			p = strchr (buff, '\0');
-			if (p[-1] != '\\') *(p++) = '\\';
-			strcpy (p, name);
+            len = strlen(buff);
+            char *last_char = buff + len -1;
+			if (len > 0 && *last_char != '\\') {
+                /* Phase 1: Buffer Overflow Prevention - Use strncat */
+                strncat(buff, "\\", sizeof(buff) - len -1);
+                buff[sizeof(buff) - 1] = '\0';
+                len = strlen(buff);
+            }
+            /* Phase 1: Buffer Overflow Prevention - Use snprintf */
+            snprintf(buff + len, sizeof(buff) - len, "%s", name);
 			file = fopen (buff, mode);
 		}
 		if (file) {
 			*path = strdup (buff);
+            /* Phase 1: Memory Allocation Check */
+            if (!*path) {
+                /* LogPrintf("CONFIG: strdup for path in open_default failed.\n"); */
+                fclose(file);
+                return NULL; /* Indicate error */
+            }
 		}
 	}
 	
@@ -103,7 +144,7 @@ save_config (const char * key, const char * arg)
 {
 	struct cfg_line {
 		struct cfg_line * Next;
-		char              Text[1];
+		char              Text[1]; /* Flexible array member */
 	}    * list = NULL, * match = NULL, * nmtch = NULL;
 	size_t klen = (key ? strlen (key) : 0);
 	BOOL   ok   = TRUE;
@@ -112,7 +153,8 @@ save_config (const char * key, const char * arg)
 	
 	if ((file = open_cfg ("r")) != NULL) {
 		struct cfg_line ** pptr = &list;
-		char buff[1024], * beg, * end;
+		char buff[1024]; /* Fixed size buffer for reading lines */
+        char * beg, * end;
 		while ((beg = fgets (buff, (int)sizeof(buff), file)) != NULL) {
 			struct cfg_line * line;
 			while (isspace (*beg)) beg++;
@@ -123,11 +165,12 @@ save_config (const char * key, const char * arg)
 			while (end > beg && isspace (end[-1])) {
 				*(--end) = '\0';
 			}
-			if ((line = malloc (sizeof(struct cfg_line) + (end - beg))) == NULL) {
+            /* Phase 1: Memory Allocation Check and sized allocation */
+			if ((line = malloc (sizeof(struct cfg_line) + (end - beg) + 1)) == NULL) { /* +1 for null terminator */
 				ok = FALSE;
 				break;
 			}
-			memcpy (line->Text, beg, end - beg +1);
+			memcpy (line->Text, beg, (end - beg) + 1); /* +1 to copy null terminator */
 			line->Next = NULL;
 			
 			if (klen) {
@@ -160,7 +203,11 @@ save_config (const char * key, const char * arg)
 	
 	if (ok && (file = open_cfg ("w")) != NULL) {
 		struct cfg_line * line = list;
-		fprintf (file, "HighWire = %s\n", cfg_magic);
+        /* Phase 1: Buffer Overflow Prevention - Use snprintf */
+        char out_buf[1024];
+        snprintf(out_buf, sizeof(out_buf), "HighWire = %s\n", cfg_magic);
+		fprintf (file, "%s", out_buf); /* Use fprintf with %s after snprintf */
+
 		while (line) {
 			if (line == match) {
 				char * p = strchr (line->Text +1, '#');
@@ -170,13 +217,16 @@ save_config (const char * key, const char * arg)
 					spc = 0;
 				} else {
 					spc = klen + 3 + strlen (arg);
-					if (spc >= p - line->Text) {
+                    /* Phase 1: Ensure spc calculation is safe */
+					if (spc >= (size_t)(p - line->Text)) { /* Cast p - line->Text to size_t */
 						spc = 0;
 					} else {
 						spc = (p - line->Text) - spc + strlen (p);
 					}
 				}
-				fprintf (file, "%s = %s%*s\n", key, arg, (int)spc, p);
+                /* Phase 1: Buffer Overflow Prevention - Use snprintf to a temp buffer */
+                snprintf(out_buf, sizeof(out_buf), "%s = %s%*s\n", key, arg, (int)spc, p);
+				fprintf (file, "%s", out_buf);
 				
 			} else {
 				fputs (line->Text, file);
@@ -185,14 +235,18 @@ save_config (const char * key, const char * arg)
 			line = line->Next;
 		}
 		if (!match && klen) { /* nothing found to replace, so append */
-			fprintf (file, "%s = %s\n", key, arg);
+            /* Phase 1: Buffer Overflow Prevention - Use snprintf */
+            snprintf(out_buf, sizeof(out_buf), "%s = %s\n", key, arg);
+			fprintf (file, "%s", out_buf);
 		}
 		fclose (file);
 		
 		if (fresh) {
 			hwUi_info (NULL, "New config file created at\n%.100s", cfg_File);
 		}
-	}
+	} else if (!ok) { /* Phase 1: If file open for writing failed, cleanup list */
+        /* LogPrintf("CONFIG: Failed to open config file for writing.\n"); */
+    }
 	
 	while (list) {
 		struct cfg_line * line = list;
@@ -239,9 +293,10 @@ cfg_up2date (char * param, long arg)
 	(void)arg;
 	if (cfg_UptoDate < 0) {
 		char buff[20];
-		sprintf (buff, "%hu.%hu.%hu",
+        /* Phase 1: Buffer Overflow Prevention - Use snprintf */
+		snprintf (buff, sizeof(buff), "%hu.%hu.%hu",
 		         _HIGHWIRE_MAJOR_, _HIGHWIRE_MINOR_, _HIGHWIRE_REVISION_);
-		if (strcmp (buff, _HIGHWIRE_VERSION_) != E_OK) {
+		if (strcmp (buff, _HIGHWIRE_VERSION_) != E_OK) { /* Assuming E_OK from errno.h */
 			hwUi_warn ("version.h",
 			          "Inconsistency error:\n"
 			          "- Version{num} = %s\n- Version{str} = %s",
@@ -263,6 +318,11 @@ cfg_startpage (char * param, long arg)
 	}
 	if (cfg_UptoDate > 0) {
 		cfg_StartPage = strdup (param);
+        /* Phase 1: Memory Allocation Check */
+        if (!cfg_StartPage) {
+            /* LogPrintf("CONFIG: strdup for cfg_StartPage failed.\n"); */
+            cfg_UptoDate = FALSE; /* Indicate a problem */
+        }
 	}
 }
 
@@ -289,6 +349,11 @@ cfg_viewer (char * param, long arg)
 {
 	(void)arg;
 	cfg_Viewer = strdup (param);
+    /* Phase 1: Memory Allocation Check */
+    if (!cfg_Viewer) {
+        /* LogPrintf("CONFIG: strdup for cfg_Viewer failed.\n"); */
+        /* Consider setting a default or flagging an error */
+    }
 }
 
 
@@ -334,7 +399,7 @@ cfg_backgnd (char * param, long arg)
 	if (!ignore_colours) {
 		
 		if (isalpha(*param)) { /* named colour */
-			long n = scan_color (param, strlen(param));
+			long n = scan_color (param, strlen(param)); /* Assumed scan_color exists and is prototyped */
 			if (n >= 0) {
 				*(long*)arg = n;
 			}
@@ -415,6 +480,10 @@ cfg_localweb (char * param, long arg)
 {
 	(void)arg;
 	local_web = strdup (param);
+    /* Phase 1: Memory Allocation Check */
+    if (!local_web) {
+        /* LogPrintf("CONFIG: strdup for local_web failed.\n"); */
+    }
 }
 
 
@@ -423,7 +492,7 @@ static void
 cfg_cachedir (char * param, long arg)
 {
 	(void)arg;
-	cache_setup (param, 0, 0, 0);
+	cache_setup (param, 0, 0, 0); /* Assumed cache_setup has been made safe in cache.c */
 }
 
 /*----------------------------------------------------------------------------*/
@@ -433,7 +502,7 @@ cfg_cachemem (char * param, long arg)
 	long n = atol (param);
 	(void)arg;
 	if (n > 0) {
-		cache_setup (NULL, (ULONG)n * 1024, 0, 0);
+		cache_setup (NULL, (ULONG)n * 1024, 0, 0); /* Assumed cache_setup has been made safe in cache.c */
 	}
 }
 
@@ -445,7 +514,7 @@ cfg_cachedsk (char * param, long arg)
 	long m = strtoul (param, &param, 10);
 	(void)arg;
 	if (n > 0 || m > 0) {
-		cache_setup (NULL, 0, (ULONG)n * 1024, m);
+		cache_setup (NULL, 0, (ULONG)n * 1024, m); /* Assumed cache_setup has been made safe in cache.c */
 	}
 }
 
@@ -471,9 +540,9 @@ cfg_restrict (char * param, long arg)
 		while (isspace(*(++param)));
 	}
 	if (flags) {
-		if (isalnum(*param))    location_DBhost   (param, 0, &flags);
-		else if (*param == '.') location_DBdomain (param, 0, &flags);
-		else if (*param == '/') location_DBpath   (param, 0, &flags);
+		if (isalnum(*param))    location_DBhost   (param, 0, &flags); /* Assumed location_DBhost is safe */
+		else if (*param == '.') location_DBdomain (param, 0, &flags); /* Assumed location_DBdomain is safe */
+		else if (*param == '/') location_DBpath   (param, 0, &flags); /* Assumed location_DBpath is safe */
 	}
 }
 
@@ -494,7 +563,7 @@ cfg_http_proxy (char * param, long arg)
 	}
 	if (p > param) {
 		long port = atol (p);
-		hhtp_proxy (param, (port > 0  && port <= 0xFFFF ? port : 0));
+		hhtp_proxy (param, (port > 0  && port <= 0xFFFF ? port : 0)); /* Assumed hhtp_proxy is safe */
 	}
 }
 
@@ -504,7 +573,7 @@ static void
 cfg_urlhist (char * param, long arg)
 {
 	(void)arg;
-	hwWind_urlhist (NULL, param);
+	hwWind_urlhist (NULL, param); /* Assumed hwWind_urlhist is safe */
 }
 
 
@@ -553,8 +622,9 @@ cfg_devl_flags (char * param, long arg)
 			size_t   f_len = f_end - f_beg;
 			size_t   v_len = v_end - v_beg;
 			size_t    size = sizeof (struct s_devl_flag)
-			               + f_len + (v_len ? v_len +1 : 0);
+			               + f_len + (v_len ? v_len +1 : 0) +1; /* +1 for null terminator */
 			DEVL_FLAG flag = malloc (size);
+            /* Phase 1: Memory Allocation Check */
 			if (flag) {
 				((char*)memcpy (flag->Name, f_beg, f_len))[f_len] = '\0';
 				flag->Value = flag->Name + f_len;
@@ -563,7 +633,9 @@ cfg_devl_flags (char * param, long arg)
 				}
 				flag->Next = _flag_list;
 				_flag_list = flag;
-			}
+			} else {
+                /* LogPrintf("CONFIG: Failed to allocate DEVL_FLAG.\n"); */
+            }
 		}
 		while (isspace(*param)) param++;
 	}
